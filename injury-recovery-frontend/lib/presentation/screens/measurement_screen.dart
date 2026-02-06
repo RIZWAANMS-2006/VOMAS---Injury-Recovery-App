@@ -373,6 +373,35 @@ class _ConnectionStatusBar extends StatelessWidget {
                   ],
                 ),
               ),
+              // Calibrate button (only show when connected)
+              if (isConnected) ...[
+                ElevatedButton.icon(
+                  onPressed: () {
+                    context.read<AngleBloc>().add(CalibrateRequested());
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Calibration signal sent'),
+                        duration: Duration(seconds: 2),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF9C27B0),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                  ),
+                  icon: const Icon(
+                    Icons.tune_rounded,
+                    size: 20,
+                  ),
+                  label: const Text('Calibrate'),
+                ),
+                const SizedBox(width: 8),
+              ],
               // Connect/Disconnect button
               ElevatedButton.icon(
                 onPressed: () {

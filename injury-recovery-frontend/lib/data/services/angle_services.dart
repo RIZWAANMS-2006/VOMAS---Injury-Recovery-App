@@ -155,6 +155,21 @@ class AngleService {
     }
   }
 
+  /// Send calibration signal to backend
+  void calibrate() {
+    if (_socket != null && _isConnected) {
+      _socket!.emit('calibrate');
+      print('📤 Sent calibrate signal');
+      
+      // Listen for calibration acknowledgment (optional)
+      _socket!.once('calibration-acknowledged', (data) {
+        print('✅ Calibration acknowledged: $data');
+      });
+    } else {
+      print('⚠️ Cannot calibrate - not connected');
+    }
+  }
+
   /// Reset the service state (called when navigating away)
   void reset() {
     disconnect();

@@ -16,6 +16,7 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
     on<AnglesReceived>(_onAnglesReceived);
     on<TaskSelected>(_onTaskSelected);
     on<ActionSelected>(_onActionSelected);
+    on<CalibrateRequested>(_onCalibrateRequested);
 
     // Listen to service stream with subscription management
     _subscribeToAngles();
@@ -114,6 +115,13 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
   void _onActionSelected(ActionSelected event, Emitter<AngleState> emit) {
     _angleService.selectAction(event.actionName);
     emit(state.copyWith(selectedAction: event.actionName));
+  }
+
+  void _onCalibrateRequested(
+    CalibrateRequested event,
+    Emitter<AngleState> emit,
+  ) {
+    _angleService.calibrate();
   }
 
   bool _validateAngles(Angles angles) {

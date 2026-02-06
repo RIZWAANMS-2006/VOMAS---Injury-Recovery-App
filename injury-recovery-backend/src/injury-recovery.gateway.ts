@@ -2,9 +2,11 @@ import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, Conne
 import { Server, Socket } from 'socket.io';
 import { AnglesDto, FilteredAnglesOutput, FilteredJointMeasurement } from './dto/debug-angles.dto';
 import { getMeasurementsForAction, MeasurementType } from './config/action-mapping.config';
+import { VOMASService } from './injury-recovery.service';
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class VOMASGateway {
+  constructor(private readonly vomasService: VOMASService) {}
   @WebSocketServer()
   server: Server;
 
@@ -26,6 +28,21 @@ export class VOMASGateway {
     console.log('Client disconnected:', client.id);
     // Clean up client action on disconnect
     this.clientActions.delete(client.id);
+  }
+
+  /**
+   * Handle calibration request from client
+   */
+  @SubscribeMessage('calibrate')
+  async handleCalibrate(@ConnectedSocket() client: Socket) {
+    console.log(`Calibration request received from client ${client.id}`);
+    
+    const result = await this.vomasService.calibrateIotDevice();
+    
+    // Emit acknowledgment back to client
+    client.emit('calibration-acknowledged', result);
+    
+    return result;
   }
 
   /**

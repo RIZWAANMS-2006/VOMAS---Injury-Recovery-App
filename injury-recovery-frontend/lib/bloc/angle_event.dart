@@ -26,3 +26,6 @@ class ActionSelected implements AngleEvent {
   final String actionName;
   ActionSelected(this.actionName);
 }
+
+/// Event to trigger calibration on IoT device
+class CalibrateRequested implements AngleEvent {}
