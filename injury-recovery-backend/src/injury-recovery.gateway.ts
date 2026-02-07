@@ -1,7 +1,20 @@
-import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket } from '@nestjs/websockets';
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { AnglesDto, FilteredAnglesOutput, FilteredJointMeasurement } from './dto/debug-angles.dto';
-import { getMeasurementsForAction, MeasurementType } from './config/action-mapping.config';
+import {
+  AnglesDto,
+  FilteredAnglesOutput,
+  FilteredJointMeasurement,
+} from './dto/debug-angles.dto';
+import {
+  getMeasurementsForAction,
+  MeasurementType,
+} from './config/action-mapping.config';
 import { VOMASService } from './injury-recovery.service';
 
 @WebSocketGateway({ cors: { origin: '*' } })
@@ -9,7 +22,6 @@ export class VOMASGateway {
   constructor(private readonly vomasService: VOMASService) {}
   @WebSocketServer()
   server: Server;
-
   // Store latest full angle data
   private latestAngles: AnglesDto | null = null;
 
@@ -34,14 +46,14 @@ export class VOMASGateway {
    * Handle calibration request from client
    */
   @SubscribeMessage('calibrate')
-  async handleCalibrate(@ConnectedSocket() client: Socket) {
+  handleCalibrate(@ConnectedSocket() client: Socket) {
     console.log(`Calibration request received from client ${client.id}`);
-    
-    const result = await this.vomasService.calibrateIotDevice();
-    
+
+    const result = this.vomasService.requestCalibration();
+
     // Emit acknowledgment back to client
     client.emit('calibration-acknowledged', result);
-    
+
     return result;
   }
 
@@ -58,7 +70,10 @@ export class VOMASGateway {
 
     // If we have angle data, immediately send filtered data to this client
     if (this.latestAngles) {
-      const filteredData = this.filterAnglesForAction(this.latestAngles, actionName);
+      const filteredData = this.filterAnglesForAction(
+        this.latestAngles,
+        actionName,
+      );
       if (filteredData) {
         client.emit('angles-update', filteredData);
       }
@@ -81,13 +96,17 @@ export class VOMASGateway {
       if (client) {
         const filteredData = this.filterAnglesForAction(angles, actionName);
         if (filteredData) {
-          console.log(`-> Emitting to client ${clientId} (Action: ${actionName})`);
+          console.log(
+            `-> Emitting to client ${clientId} (Action: ${actionName})`,
+          );
           client.emit('angles-update', filteredData);
         } else {
           console.log(`-> Start filtering failed for action: ${actionName}`);
         }
       } else {
-        console.log(`-> Client ${clientId} socket object not found in server instance`);
+        console.log(
+          `-> Client ${clientId} socket object not found in server instance`,
+        );
       }
     });
   }
@@ -95,7 +114,10 @@ export class VOMASGateway {
   /**
    * Filter angle data based on action mapping
    */
-  private filterAnglesForAction(angles: AnglesDto, actionName: string): FilteredAnglesOutput | null {
+  private filterAnglesForAction(
+    angles: AnglesDto,
+    actionName: string,
+  ): FilteredAnglesOutput | null {
     const mapping = getMeasurementsForAction(actionName);
     if (!mapping) {
       console.log(`Invalid action: ${actionName}`);
@@ -122,4 +144,3 @@ export class VOMASGateway {
     };
   }
 }
-

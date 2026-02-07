@@ -1,6 +1,7 @@
 // _AngleChip widget (same as previous response)
 // ignore_for_file: deprecated_member_use
 
+import 'package:VOMAS/data/services/api_config.dart';
 import 'package:flutter/material.dart';
 import 'package:VOMAS/data/models/angles.dart';
 import 'package:VOMAS/data/models/vomas_task.dart';
@@ -68,7 +69,7 @@ class VomasTestScreen extends StatelessWidget {
                           context.read<AngleBloc>().add(DisconnectRequested());
                         } else {
                           context.read<AngleBloc>().add(
-                            ConnectRequested('http://localhost:3000'),
+                            ConnectRequested(ApiConfig.baseUrl),
                           );
                         }
                       },

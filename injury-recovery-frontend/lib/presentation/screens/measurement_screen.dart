@@ -1,6 +1,7 @@
 // lib/presentation/screens/measurement_screen.dart
 // Screen displaying measurements for the selected action
 
+import 'package:VOMAS/data/services/api_config.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:VOMAS/bloc/angle_bloc.dart';
@@ -411,7 +412,7 @@ class _ConnectionStatusBar extends StatelessWidget {
                     // Connect and register action with backend
                     context.read<AngleBloc>().add(
                       ConnectRequested(
-                        'http://localhost:3000',
+                        ApiConfig.baseUrl,
                         actionName: actionName,
                       ),
                     );
