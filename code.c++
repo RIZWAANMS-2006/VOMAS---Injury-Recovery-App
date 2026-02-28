@@ -1,15 +1,14 @@
 // ============================================================
 // VOMAS - ESP32-A (MASTER)
-// Version: 3.7 (HTTP POST to Remote Server)
+// Version: 3.9 (FAST HTTP + REST API Endpoints)
 // 
-// CHANGES FROM v3.6:
-//   - Sends motion data to remote server via HTTP POST
-//   - Endpoint: https://vomas-injury-recovery-app.onrender.com/VOMAS/angles
-//   - Posts all 18 values (9 angles + 9 peak speeds) as JSON
-//
-// OUTPUT FORMAT (labeled, no decimals):
-// Angles: SH_R:5 SH_P:12 SH_Y:3 EL_R:2 EL_P:5 EL_Y:45 WR_R:1 WR_P:3 WR_Y:2
-// Peak Velocities (every 3s): PK_SH_R:45 PK_SH_P:12 ... (deg/s)
+// FEATURES:
+//   - Async HTTP POST to server (Core 0)
+//   - REST API GET endpoints for calibration & status
+//   - POST /VOMAS/angles - sends motion data to server
+//   - GET /api/data - returns current motion data
+//   - GET /api/calibrate - triggers calibration
+//   - GET /api/status - returns calibration status
 // ============================================================
 
 #include "ICM_20948.h"
@@ -17,17 +16,19 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <WebServer.h>
 #include <Preferences.h>
 
 #define SERIAL_PORT Serial
 #define WIRE_PORT   Wire
-#define AD0_IMU_A 0  // Shoulder (0x69)
-#define AD0_IMU_B 1  // Forearm (0x68)
+#define AD0_IMU_A 0
+#define AD0_IMU_B 1
 #define I2C_SPEED 100000
 
 ICM_20948_I2C imu_a;
 ICM_20948_I2C imu_b;
 Preferences prefs;
+WebServer server(80);
 
 // ============ WIFI CREDENTIALS ============
 const char* WIFI_SSID = "K";
@@ -35,9 +36,33 @@ const char* WIFI_PASSWORD = "12345678";
 
 // ============ REMOTE SERVER ENDPOINT ============
 const char* SERVER_URL = "https://vomas-injury-recovery-app.onrender.com/VOMAS/angles";
-const unsigned long POST_INTERVAL_MS = 100;  // Send data every 100ms (10Hz)
-unsigned long last_post_ms = 0;
+const char* CALIBRATION_CHECK_URL = "https://vomas-injury-recovery-app.onrender.com/VOMAS/calibration-check";
+const unsigned long POST_INTERVAL_MS = 500;  // 500ms = 2Hz (sufficient for rehab tracking)
+const unsigned long CALIBRATION_POLL_INTERVAL_MS = 2000;  // Poll every 2 seconds
 bool wifi_connected = false;
+
+// ============ ASYNC HTTP TASK ============
+TaskHandle_t httpTaskHandle = NULL;
+SemaphoreHandle_t dataMutex;
+
+// ============ CALIBRATION REQUEST FLAG ============
+volatile bool calibrationRequested = false;
+
+// Shared data structure for HTTP task
+struct SharedMotionData {
+  int sh_roll, sh_pitch, sh_yaw;
+  int el_roll, el_pitch, el_yaw;
+  int wr_roll, wr_pitch, wr_yaw;
+  int pk_sh_r, pk_sh_p, pk_sh_y;
+  int pk_el_r, pk_el_p, pk_el_y;
+  int pk_wr_r, pk_wr_p, pk_wr_y;
+  bool updated;
+} sharedData = {0};
+
+// HTTP statistics
+volatile unsigned long http_success_count = 0;
+volatile unsigned long http_fail_count = 0;
+volatile unsigned long http_last_duration_ms = 0;
 
 // ============ AXIS SIGN CONFIGURATION ============
 const int SHOULDER_ROLL_SIGN  = 1;
@@ -78,9 +103,9 @@ struct QuatData {
   bool valid;
 };
 
-QuatData imu_data[2];  // 0=IMU-A, 1=IMU-B
+QuatData imu_data[2];
 
-// ============ WRIST DATA (Received from ESP32-C) ============
+// ============ WRIST DATA ============
 struct WristData {
   double roll;
   double pitch;
@@ -163,12 +188,11 @@ struct VelocityTracker {
   }
 };
 
-// Velocity trackers
 VelocityTracker v_sh_r, v_sh_p, v_sh_y;
 VelocityTracker v_el_r, v_el_p, v_el_y;
 VelocityTracker v_wr_r, v_wr_p, v_wr_y;
 
-// ============ PEAK VELOCITY HOLD (3-second windows) ============
+// ============ PEAK VELOCITY ============
 const unsigned long PEAK_HOLD_MS = 3000;
 unsigned long peak_window_start = 0;
 
@@ -207,52 +231,229 @@ unsigned long packets_received = 0;
 unsigned long last_sync_ms = 0;
 bool output_enabled = true;
 
-// HTTP POST statistics
-unsigned long http_success_count = 0;
-unsigned long http_fail_count = 0;
+// ============ REST API HANDLERS ============
+
+void addCorsHeaders() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+// GET /api/data - Returns current motion data
+void handleGetData() {
+  addCorsHeaders();
+  
+  String json = "{";
+  json += "\"shoulder\":{";
+  json += "\"roll\":{\"angle\":" + String((int)sh_roll) + ",\"speed\":" + String((int)peak_sh_r) + "},";
+  json += "\"pitch\":{\"angle\":" + String((int)sh_pitch) + ",\"speed\":" + String((int)peak_sh_p) + "},";
+  json += "\"yaw\":{\"angle\":" + String((int)sh_yaw) + ",\"speed\":" + String((int)peak_sh_y) + "}";
+  json += "},";
+  json += "\"elbow\":{";
+  json += "\"roll\":{\"angle\":" + String((int)el_roll) + ",\"speed\":" + String((int)peak_el_r) + "},";
+  json += "\"pitch\":{\"angle\":" + String((int)el_pitch) + ",\"speed\":" + String((int)peak_el_p) + "},";
+  json += "\"yaw\":{\"angle\":" + String((int)el_yaw) + ",\"speed\":" + String((int)peak_el_y) + "}";
+  json += "},";
+  json += "\"wrist\":{";
+  json += "\"roll\":{\"angle\":" + String((int)wr_roll) + ",\"speed\":" + String((int)peak_wr_r) + "},";
+  json += "\"pitch\":{\"angle\":" + String((int)wr_pitch) + ",\"speed\":" + String((int)peak_wr_p) + "},";
+  json += "\"yaw\":{\"angle\":" + String((int)wr_yaw) + ",\"speed\":" + String((int)peak_wr_y) + "}";
+  json += "}";
+  json += "}";
+  
+  server.send(200, "application/json", json);
+}
+
+// REMOVED: handleCalibrate() and handleStatus()
+// Calibration is now triggered via NestJS backend polling
+// ESP32 polls GET /VOMAS/calibration-check from the server
+
+// OPTIONS handler for CORS preflight
+void handleOptions() {
+  addCorsHeaders();
+  server.send(204);
+}
+
+// 404 handler
+void handleNotFound() {
+  addCorsHeaders();
+  
+  String json = "{";
+  json += "\"error\":\"Not found\",";
+  json += "\"available_endpoints\":[";
+  json += "\"/api/data\",";
+  json += "\"/api/calibrate\",";
+  json += "\"/api/status\"";
+  json += "]";
+  json += "}";
+  
+  server.send(404, "application/json", json);
+}
+
+// ============ HTTP POST TASK (RUNS ON CORE 0) ============
+void httpTask(void *parameter) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(5000);  // 5 second timeout for HTTPS
+  
+  HTTPClient http;
+  http.setReuse(true);
+  
+  unsigned long lastPostTime = 0;
+  bool connected = false;
+  
+  while (true) {
+    if (WiFi.status() != WL_CONNECTED) {
+      connected = false;
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+    
+    if (millis() - lastPostTime < POST_INTERVAL_MS) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+    
+    SharedMotionData localData;
+    if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      localData = sharedData;
+      sharedData.updated = false;
+      xSemaphoreGive(dataMutex);
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+    
+    String json = "{";
+    json += "\"shoulder\":{";
+    json += "\"roll\":{\"angle\":" + String(localData.sh_roll) + ",\"speed\":" + String(localData.pk_sh_r) + "},";
+    json += "\"pitch\":{\"angle\":" + String(localData.sh_pitch) + ",\"speed\":" + String(localData.pk_sh_p) + "},";
+    json += "\"yaw\":{\"angle\":" + String(localData.sh_yaw) + ",\"speed\":" + String(localData.pk_sh_y) + "}";
+    json += "},";
+    json += "\"elbow\":{";
+    json += "\"roll\":{\"angle\":" + String(localData.el_roll) + ",\"speed\":" + String(localData.pk_el_r) + "},";
+    json += "\"pitch\":{\"angle\":" + String(localData.el_pitch) + ",\"speed\":" + String(localData.pk_el_p) + "},";
+    json += "\"yaw\":{\"angle\":" + String(localData.el_yaw) + ",\"speed\":" + String(localData.pk_el_y) + "}";
+    json += "},";
+    json += "\"wrist\":{";
+    json += "\"roll\":{\"angle\":" + String(localData.wr_roll) + ",\"speed\":" + String(localData.pk_wr_r) + "},";
+    json += "\"pitch\":{\"angle\":" + String(localData.wr_pitch) + ",\"speed\":" + String(localData.pk_wr_p) + "},";
+    json += "\"yaw\":{\"angle\":" + String(localData.wr_yaw) + ",\"speed\":" + String(localData.pk_wr_y) + "}";
+    json += "}}";
+    
+    unsigned long startTime = millis();
+    
+    if (!connected) {
+      if (http.begin(client, SERVER_URL)) {
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader("Connection", "keep-alive");
+        connected = true;
+      }
+    }
+    
+    if (connected) {
+      int httpCode = http.POST(json);
+      http_last_duration_ms = millis() - startTime;
+      
+      if (httpCode > 0) {
+        http_success_count++;
+        http.getString();
+      } else {
+        http_fail_count++;
+        connected = false;
+        http.end();
+      }
+    }
+    
+    lastPostTime = millis();
+    
+    // ============ CALIBRATION POLLING (every 2s) ============
+    static unsigned long lastCalibrationCheck = 0;
+    if (millis() - lastCalibrationCheck >= CALIBRATION_POLL_INTERVAL_MS) {
+      lastCalibrationCheck = millis();
+      
+      WiFiClientSecure calClient;
+      calClient.setInsecure();
+      calClient.setTimeout(5000);
+      HTTPClient httpCal;
+      
+      if (httpCal.begin(calClient, CALIBRATION_CHECK_URL)) {
+        int calCode = httpCal.GET();
+        if (calCode == 200) {
+          String response = httpCal.getString();
+          if (response.indexOf("true") >= 0) {
+            calibrationRequested = true;
+            SERIAL_PORT.println(F("CALIBRATION POLL: Trigger received from server!"));
+          }
+        } else {
+          SERIAL_PORT.print(F("CALIBRATION POLL: HTTP error: "));
+          SERIAL_PORT.println(calCode);
+        }
+        httpCal.end();
+      }
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+// ============ UPDATE SHARED DATA ============
+void updateSharedData() {
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    sharedData.sh_roll = (int)sh_roll;
+    sharedData.sh_pitch = (int)sh_pitch;
+    sharedData.sh_yaw = (int)sh_yaw;
+    sharedData.el_roll = (int)el_roll;
+    sharedData.el_pitch = (int)el_pitch;
+    sharedData.el_yaw = (int)el_yaw;
+    sharedData.wr_roll = (int)wr_roll;
+    sharedData.wr_pitch = (int)wr_pitch;
+    sharedData.wr_yaw = (int)wr_yaw;
+    sharedData.pk_sh_r = (int)peak_sh_r;
+    sharedData.pk_sh_p = (int)peak_sh_p;
+    sharedData.pk_sh_y = (int)peak_sh_y;
+    sharedData.pk_el_r = (int)peak_el_r;
+    sharedData.pk_el_p = (int)peak_el_p;
+    sharedData.pk_el_y = (int)peak_el_y;
+    sharedData.pk_wr_r = (int)peak_wr_r;
+    sharedData.pk_wr_p = (int)peak_wr_p;
+    sharedData.pk_wr_y = (int)peak_wr_y;
+    sharedData.updated = true;
+    xSemaphoreGive(dataMutex);
+  }
+}
 
 // ============ NVS FUNCTIONS ============
-
 void saveCalibrationToNVS() {
   prefs.begin("vomas_cal", false);
-  
   prefs.putDouble("a_w", cal_data.neutral_a_w);
   prefs.putDouble("a_x", cal_data.neutral_a_x);
   prefs.putDouble("a_y", cal_data.neutral_a_y);
   prefs.putDouble("a_z", cal_data.neutral_a_z);
-  
   prefs.putDouble("b_w", cal_data.neutral_b_w);
   prefs.putDouble("b_x", cal_data.neutral_b_x);
   prefs.putDouble("b_y", cal_data.neutral_b_y);
   prefs.putDouble("b_z", cal_data.neutral_b_z);
-  
   prefs.putBool("valid", true);
-  
   prefs.end();
-  
-  SERIAL_PORT.println(F("CALIBRATION: Saved to NVS (permanent storage)"));
+  SERIAL_PORT.println(F("CALIBRATION: Saved to NVS"));
 }
 
 bool loadCalibrationFromNVS() {
   prefs.begin("vomas_cal", true);
-  
   bool valid = prefs.getBool("valid", false);
-  
   if (valid) {
     cal_data.neutral_a_w = prefs.getDouble("a_w", 1.0);
     cal_data.neutral_a_x = prefs.getDouble("a_x", 0.0);
     cal_data.neutral_a_y = prefs.getDouble("a_y", 0.0);
     cal_data.neutral_a_z = prefs.getDouble("a_z", 0.0);
-    
     cal_data.neutral_b_w = prefs.getDouble("b_w", 1.0);
     cal_data.neutral_b_x = prefs.getDouble("b_x", 0.0);
     cal_data.neutral_b_y = prefs.getDouble("b_y", 0.0);
     cal_data.neutral_b_z = prefs.getDouble("b_z", 0.0);
-    
     cal_data.calibrated = true;
     cal_data.calibration_time_ms = millis();
   }
-  
   prefs.end();
   return valid;
 }
@@ -261,14 +462,11 @@ void clearCalibrationFromNVS() {
   prefs.begin("vomas_cal", false);
   prefs.clear();
   prefs.end();
-  
   cal_data.calibrated = false;
-  
-  SERIAL_PORT.println(F("CALIBRATION: Cleared from NVS"));
+  SERIAL_PORT.println(F("CALIBRATION: Cleared"));
 }
 
 // ============ QUATERNION MATH ============
-
 bool buildQuatFromDMP(const icm_20948_DMP_data_t &d, double &qw, double &qx, double &qy, double &qz) {
   if ((d.header & DMP_header_bitmap_Quat6) == 0) return false;
   
@@ -328,17 +526,13 @@ void drainFIFO(ICM_20948_I2C &imu) {
   }
 }
 
-// ============ SHOULDER (IMU-A ABSOLUTE) ============
+// ============ ANGLE CALCULATIONS ============
 void getShoulderAngles(double &roll, double &pitch, double &yaw) {
-  if (!imu_data[0].valid) {
-    roll = pitch = yaw = 0;
-    return;
-  }
+  if (!imu_data[0].valid) { roll = pitch = yaw = 0; return; }
   
   double cw, cx, cy, cz;
   quatConjugate(cal_data.neutral_a_w, cal_data.neutral_a_x, 
-                cal_data.neutral_a_y, cal_data.neutral_a_z,
-                cw, cx, cy, cz);
+                cal_data.neutral_a_y, cal_data.neutral_a_z, cw, cx, cy, cz);
   
   double ow, ox, oy, oz;
   quatMultiply(imu_data[0].w, imu_data[0].x, imu_data[0].y, imu_data[0].z,
@@ -354,12 +548,8 @@ void getShoulderAngles(double &roll, double &pitch, double &yaw) {
   yaw   *= SHOULDER_YAW_SIGN;
 }
 
-// ============ ELBOW (IMU-B RELATIVE TO IMU-A) ============
 void getElbowAngles(double &roll, double &pitch, double &yaw) {
-  if (!imu_data[0].valid || !imu_data[1].valid) {
-    roll = pitch = yaw = 0;
-    return;
-  }
+  if (!imu_data[0].valid || !imu_data[1].valid) { roll = pitch = yaw = 0; return; }
   
   double cw, cx, cy, cz;
   quatConjugate(cal_data.neutral_a_w, cal_data.neutral_a_x,
@@ -388,13 +578,8 @@ void getElbowAngles(double &roll, double &pitch, double &yaw) {
   yaw   *= ELBOW_YAW_SIGN;
 }
 
-// ============ WRIST (Received from ESP32-C Slave) ============
 void getWristAngles(double &roll, double &pitch, double &yaw) {
-  if (!wrist_data.valid) {
-    roll = pitch = yaw = 0;
-    return;
-  }
-  
+  if (!wrist_data.valid) { roll = pitch = yaw = 0; return; }
   roll  = wrist_data.roll * WRIST_ROLL_SIGN;
   pitch = wrist_data.pitch * WRIST_PITCH_SIGN;
   yaw   = wrist_data.yaw * WRIST_YAW_SIGN;
@@ -414,38 +599,25 @@ void checkDrift() {
   );
   
   if (stationary && drift.was_stationary) {
-    double sh_drift = sqrt(
-      pow(sh_roll - drift.last_sh_roll, 2) +
-      pow(sh_pitch - drift.last_sh_pitch, 2) +
-      pow(sh_yaw - drift.last_sh_yaw, 2)
-    );
-    
-    double el_drift = sqrt(
-      pow(el_roll - drift.last_el_roll, 2) +
-      pow(el_pitch - drift.last_el_pitch, 2) +
-      pow(el_yaw - drift.last_el_yaw, 2)
-    );
+    double sh_drift = sqrt(pow(sh_roll - drift.last_sh_roll, 2) +
+                           pow(sh_pitch - drift.last_sh_pitch, 2) +
+                           pow(sh_yaw - drift.last_sh_yaw, 2));
+    double el_drift = sqrt(pow(el_roll - drift.last_el_roll, 2) +
+                           pow(el_pitch - drift.last_el_pitch, 2) +
+                           pow(el_yaw - drift.last_el_yaw, 2));
     
     if (sh_drift > DRIFT_WARNING_THRESHOLD || el_drift > DRIFT_WARNING_THRESHOLD) {
       drift.warning_count++;
       SERIAL_PORT.println();
-      SERIAL_PORT.print(F("DRIFT_WARNING:"));
-      SERIAL_PORT.print(drift.warning_count);
-      SERIAL_PORT.print(F(" SH_DRIFT:"));
-      SERIAL_PORT.print((int)sh_drift);
-      SERIAL_PORT.print(F(" EL_DRIFT:"));
-      SERIAL_PORT.print((int)el_drift);
-      SERIAL_PORT.println(F(" ACTION:PRESS_C_TO_RECALIBRATE"));
+      SERIAL_PORT.print(F("DRIFT_WARNING:")); SERIAL_PORT.print(drift.warning_count);
+      SERIAL_PORT.print(F(" SH:")); SERIAL_PORT.print((int)sh_drift);
+      SERIAL_PORT.print(F(" EL:")); SERIAL_PORT.println((int)el_drift);
     }
   }
   
   if (stationary) {
-    drift.last_sh_roll = sh_roll;
-    drift.last_sh_pitch = sh_pitch;
-    drift.last_sh_yaw = sh_yaw;
-    drift.last_el_roll = el_roll;
-    drift.last_el_pitch = el_pitch;
-    drift.last_el_yaw = el_yaw;
+    drift.last_sh_roll = sh_roll; drift.last_sh_pitch = sh_pitch; drift.last_sh_yaw = sh_yaw;
+    drift.last_el_roll = el_roll; drift.last_el_pitch = el_pitch; drift.last_el_yaw = el_yaw;
   }
   
   drift.was_stationary = stationary;
@@ -456,7 +628,6 @@ void checkDrift() {
 void onDataReceived(const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
   if (len == sizeof(WristDataPacket)) {
     WristDataPacket *packet = (WristDataPacket*)data;
-    
     if (packet->imu_id == 2 && packet->valid) {
       wrist_data.roll = packet->roll;
       wrist_data.pitch = packet->pitch;
@@ -482,57 +653,7 @@ void sendTimeSync() {
 void checkWristConnection() {
   if (wrist_data.valid && (millis() - wrist_data.last_received_ms > 2000)) {
     wrist_data.valid = false;
-    SERIAL_PORT.println(F("WARNING: Wrist data timeout - check ESP32-C connection"));
-  }
-}
-
-// ============ HTTP POST TO SERVER ============
-void postDataToServer() {
-  if (!wifi_connected) return;
-  if (millis() - last_post_ms < POST_INTERVAL_MS) return;
-  
-  last_post_ms = millis();
-  
-  // Build JSON string manually (faster than ArduinoJson for this simple case)
-  String jsonPayload = "{";
-  jsonPayload += "\"shoulder\":{";
-  jsonPayload += "\"roll\":{\"angle\":" + String((int)sh_roll) + ",\"speed\":" + String((int)peak_sh_r) + "},";
-  jsonPayload += "\"pitch\":{\"angle\":" + String((int)sh_pitch) + ",\"speed\":" + String((int)peak_sh_p) + "},";
-  jsonPayload += "\"yaw\":{\"angle\":" + String((int)sh_yaw) + ",\"speed\":" + String((int)peak_sh_y) + "}";
-  jsonPayload += "},";
-  jsonPayload += "\"elbow\":{";
-  jsonPayload += "\"roll\":{\"angle\":" + String((int)el_roll) + ",\"speed\":" + String((int)peak_el_r) + "},";
-  jsonPayload += "\"pitch\":{\"angle\":" + String((int)el_pitch) + ",\"speed\":" + String((int)peak_el_p) + "},";
-  jsonPayload += "\"yaw\":{\"angle\":" + String((int)el_yaw) + ",\"speed\":" + String((int)peak_el_y) + "}";
-  jsonPayload += "},";
-  jsonPayload += "\"wrist\":{";
-  jsonPayload += "\"roll\":{\"angle\":" + String((int)wr_roll) + ",\"speed\":" + String((int)peak_wr_r) + "},";
-  jsonPayload += "\"pitch\":{\"angle\":" + String((int)wr_pitch) + ",\"speed\":" + String((int)peak_wr_p) + "},";
-  jsonPayload += "\"yaw\":{\"angle\":" + String((int)wr_yaw) + ",\"speed\":" + String((int)peak_wr_y) + "}";
-  jsonPayload += "}";
-  jsonPayload += "}";
-  
-  WiFiClientSecure client;
-  client.setInsecure();  // Skip certificate verification (for simplicity)
-  
-  HTTPClient http;
-  
-  if (http.begin(client, SERVER_URL)) {
-    http.addHeader("Content-Type", "application/json");
-    
-    int httpResponseCode = http.POST(jsonPayload);
-    
-    if (httpResponseCode > 0) {
-      http_success_count++;
-      // Uncomment below for debugging
-      // SERIAL_PORT.print(F("HTTP POST OK: ")); SERIAL_PORT.println(httpResponseCode);
-    } else {
-      http_fail_count++;
-      // Uncomment below for debugging
-      // SERIAL_PORT.print(F("HTTP POST FAILED: ")); SERIAL_PORT.println(http.errorToString(httpResponseCode));
-    }
-    
-    http.end();
+    SERIAL_PORT.println(F("WARNING: Wrist timeout"));
   }
 }
 
@@ -540,21 +661,18 @@ void postDataToServer() {
 void calibrateZero() {
   output_enabled = false;
   
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.println(F("========================================"));
+  SERIAL_PORT.println(F("\n========================================"));
   SERIAL_PORT.println(F("       CALIBRATION - ZERO AT REST       "));
-  SERIAL_PORT.println(F("========================================"));
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.println(F("POSITION: Arm straight at side"));
-  SERIAL_PORT.println(F("          Elbow extended (0 degrees)"));
-  SERIAL_PORT.println(F("          Palm facing thigh"));
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.println(F("NOTE: Wrist angles from ESP32-C are"));
-  SERIAL_PORT.println(F("      calibrated on the slave device"));
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.println(F("CALIBRATING IN 3 SECONDS - HOLD STILL"));
+  SERIAL_PORT.println(F("========================================\n"));
+  SERIAL_PORT.println(F("POSITION: Arm straight, palm to thigh"));
+  SERIAL_PORT.println(F("CALIBRATING IN 3 SECONDS...\n"));
   
-  delay(3000);
+  // Non-blocking 3-second wait (keeps WebServer alive if still running)
+  unsigned long waitStart = millis();
+  while (millis() - waitStart < 3000) {
+    if (wifi_connected) server.handleClient();
+    delay(10);
+  }
   
   double sum_a_w=0, sum_a_x=0, sum_a_y=0, sum_a_z=0;
   double sum_b_w=0, sum_b_x=0, sum_b_y=0, sum_b_z=0;
@@ -563,8 +681,7 @@ void calibrateZero() {
   SERIAL_PORT.print(F("SAMPLING"));
   
   for (int i = 0; i < 150; i++) {
-    drainFIFO(imu_a);
-    drainFIFO(imu_b);
+    drainFIFO(imu_a); drainFIFO(imu_b);
     
     icm_20948_DMP_data_t da, db;
     imu_a.readDMPdataFromFIFO(&da);
@@ -573,12 +690,10 @@ void calibrateZero() {
     double qw, qx, qy, qz;
     
     if (buildQuatFromDMP(da, qw, qx, qy, qz)) {
-      sum_a_w += qw; sum_a_x += qx; sum_a_y += qy; sum_a_z += qz;
-      n_a++;
+      sum_a_w += qw; sum_a_x += qx; sum_a_y += qy; sum_a_z += qz; n_a++;
     }
     if (buildQuatFromDMP(db, qw, qx, qy, qz)) {
-      sum_b_w += qw; sum_b_x += qx; sum_b_y += qy; sum_b_z += qz;
-      n_b++;
+      sum_b_w += qw; sum_b_x += qx; sum_b_y += qy; sum_b_z += qz; n_b++;
     }
     
     if (i % 30 == 0) SERIAL_PORT.print(".");
@@ -593,62 +708,39 @@ void calibrateZero() {
     cal_data.neutral_a_x = sum_a_x / n_a;
     cal_data.neutral_a_y = sum_a_y / n_a;
     cal_data.neutral_a_z = sum_a_z / n_a;
-    double mag = sqrt(cal_data.neutral_a_w*cal_data.neutral_a_w + 
-                      cal_data.neutral_a_x*cal_data.neutral_a_x +
-                      cal_data.neutral_a_y*cal_data.neutral_a_y + 
-                      cal_data.neutral_a_z*cal_data.neutral_a_z);
+    double mag = sqrt(cal_data.neutral_a_w*cal_data.neutral_a_w + cal_data.neutral_a_x*cal_data.neutral_a_x +
+                      cal_data.neutral_a_y*cal_data.neutral_a_y + cal_data.neutral_a_z*cal_data.neutral_a_z);
     cal_data.neutral_a_w /= mag; cal_data.neutral_a_x /= mag;
     cal_data.neutral_a_y /= mag; cal_data.neutral_a_z /= mag;
-    SERIAL_PORT.print(F("IMU_A_SHOULDER: OK (")); SERIAL_PORT.print(n_a); SERIAL_PORT.println(F(" samples)"));
-  } else {
-    SERIAL_PORT.println(F("IMU_A_SHOULDER: FAILED"));
-    success = false;
-  }
+    SERIAL_PORT.print(F("IMU_A: OK (")); SERIAL_PORT.print(n_a); SERIAL_PORT.println(F(" samples)"));
+  } else { SERIAL_PORT.println(F("IMU_A: FAILED")); success = false; }
   
   if (n_b > 10) {
     cal_data.neutral_b_w = sum_b_w / n_b;
     cal_data.neutral_b_x = sum_b_x / n_b;
     cal_data.neutral_b_y = sum_b_y / n_b;
     cal_data.neutral_b_z = sum_b_z / n_b;
-    double mag = sqrt(cal_data.neutral_b_w*cal_data.neutral_b_w + 
-                      cal_data.neutral_b_x*cal_data.neutral_b_x +
-                      cal_data.neutral_b_y*cal_data.neutral_b_y + 
-                      cal_data.neutral_b_z*cal_data.neutral_b_z);
+    double mag = sqrt(cal_data.neutral_b_w*cal_data.neutral_b_w + cal_data.neutral_b_x*cal_data.neutral_b_x +
+                      cal_data.neutral_b_y*cal_data.neutral_b_y + cal_data.neutral_b_z*cal_data.neutral_b_z);
     cal_data.neutral_b_w /= mag; cal_data.neutral_b_x /= mag;
     cal_data.neutral_b_y /= mag; cal_data.neutral_b_z /= mag;
-    SERIAL_PORT.print(F("IMU_B_FOREARM: OK (")); SERIAL_PORT.print(n_b); SERIAL_PORT.println(F(" samples)"));
-  } else {
-    SERIAL_PORT.println(F("IMU_B_FOREARM: FAILED"));
-    success = false;
-  }
+    SERIAL_PORT.print(F("IMU_B: OK (")); SERIAL_PORT.print(n_b); SERIAL_PORT.println(F(" samples)"));
+  } else { SERIAL_PORT.println(F("IMU_B: FAILED")); success = false; }
   
   if (success) {
     cal_data.calibrated = true;
     cal_data.calibration_time_ms = millis();
-    
     saveCalibrationToNVS();
-    
     drift.last_check_ms = millis();
     drift.was_stationary = false;
     drift.warning_count = 0;
-    
     v_sh_r.reset(); v_sh_p.reset(); v_sh_y.reset();
     v_el_r.reset(); v_el_p.reset(); v_el_y.reset();
     v_wr_r.reset(); v_wr_p.reset(); v_wr_y.reset();
     resetPeaks();
-    
-    SERIAL_PORT.println(F(""));
-    SERIAL_PORT.println(F("========================================"));
-    SERIAL_PORT.println(F("CALIBRATION: SUCCESS"));
-    SERIAL_PORT.println(F("All angles now 0 at rest position"));
-    SERIAL_PORT.println(F("Saved to permanent storage (NVS)"));
-    SERIAL_PORT.println(F("NOTE: Calibrate wrist on ESP32-C slave"));
-    SERIAL_PORT.println(F("========================================"));
-    SERIAL_PORT.println(F(""));
+    SERIAL_PORT.println(F("\nCALIBRATION: SUCCESS\n"));
   } else {
-    SERIAL_PORT.println(F(""));
-    SERIAL_PORT.println(F("CALIBRATION: FAILED - Check connections"));
-    SERIAL_PORT.println(F(""));
+    SERIAL_PORT.println(F("\nCALIBRATION: FAILED\n"));
   }
   
   output_enabled = true;
@@ -662,72 +754,26 @@ void handleCommands() {
   while (Serial.available()) Serial.read();
   
   switch (cmd) {
-    case 'c':
-    case 'C':
-      calibrateZero();
-      break;
-      
-    case 'x':
-    case 'X':
-      clearCalibrationFromNVS();
-      SERIAL_PORT.println(F("Calibration cleared. Press 'c' to recalibrate."));
-      break;
-      
-    case 'p':
-    case 'P':
+    case 'c': case 'C': calibrateZero(); break;
+    case 'x': case 'X': clearCalibrationFromNVS(); break;
+    case 'p': case 'P':
       output_enabled = !output_enabled;
-      SERIAL_PORT.print(F("OUTPUT:"));
-      SERIAL_PORT.println(output_enabled ? F("ON") : F("PAUSED"));
+      SERIAL_PORT.print(F("OUTPUT:")); SERIAL_PORT.println(output_enabled ? F("ON") : F("PAUSED"));
       break;
-      
-    case 's':
-    case 'S':
-      SERIAL_PORT.println(F(""));
-      SERIAL_PORT.println(F("=== STATUS ==="));
-      SERIAL_PORT.print(F("CALIBRATED: ")); 
-      SERIAL_PORT.println(cal_data.calibrated ? F("YES (from NVS)") : F("NO"));
-      SERIAL_PORT.print(F("WIFI: ")); 
-      SERIAL_PORT.println(wifi_connected ? WiFi.localIP().toString() : F("DISCONNECTED"));
-      SERIAL_PORT.print(F("HTTP_SUCCESS: ")); SERIAL_PORT.println(http_success_count);
-      SERIAL_PORT.print(F("HTTP_FAIL: ")); SERIAL_PORT.println(http_fail_count);
-      SERIAL_PORT.print(F("ESP_C_PACKETS: ")); SERIAL_PORT.println(packets_received);
-      SERIAL_PORT.print(F("WRIST_CONNECTION: ")); 
-      SERIAL_PORT.println(wrist_data.valid ? F("OK") : F("NO DATA"));
-      if (wrist_data.valid) {
-        SERIAL_PORT.print(F("LAST_WRIST_UPDATE: "));
-        SERIAL_PORT.print(millis() - wrist_data.last_received_ms);
-        SERIAL_PORT.println(F(" ms ago"));
-      }
-      SERIAL_PORT.print(F("DRIFT_WARNINGS: ")); SERIAL_PORT.println(drift.warning_count);
-      SERIAL_PORT.println(F(""));
-      SERIAL_PORT.println(F("CALIBRATION QUATERNIONS:"));
-      SERIAL_PORT.print(F("  IMU_A: ")); 
-      SERIAL_PORT.print(cal_data.neutral_a_w, 3); SERIAL_PORT.print(F(", "));
-      SERIAL_PORT.print(cal_data.neutral_a_x, 3); SERIAL_PORT.print(F(", "));
-      SERIAL_PORT.print(cal_data.neutral_a_y, 3); SERIAL_PORT.print(F(", "));
-      SERIAL_PORT.println(cal_data.neutral_a_z, 3);
-      SERIAL_PORT.print(F("  IMU_B: ")); 
-      SERIAL_PORT.print(cal_data.neutral_b_w, 3); SERIAL_PORT.print(F(", "));
-      SERIAL_PORT.print(cal_data.neutral_b_x, 3); SERIAL_PORT.print(F(", "));
-      SERIAL_PORT.print(cal_data.neutral_b_y, 3); SERIAL_PORT.print(F(", "));
-      SERIAL_PORT.println(cal_data.neutral_b_z, 3);
-      SERIAL_PORT.println(F("=================="));
-      SERIAL_PORT.println(F(""));
+    case 's': case 'S':
+      SERIAL_PORT.println(F("\n=== STATUS ==="));
+      SERIAL_PORT.print(F("CALIBRATED: ")); SERIAL_PORT.println(cal_data.calibrated ? F("YES") : F("NO"));
+      SERIAL_PORT.print(F("WIFI: ")); SERIAL_PORT.println(wifi_connected ? WiFi.localIP().toString() : F("DISCONNECTED"));
+      SERIAL_PORT.print(F("HTTP OK/FAIL: ")); SERIAL_PORT.print(http_success_count);
+      SERIAL_PORT.print(F("/")); SERIAL_PORT.println(http_fail_count);
+      SERIAL_PORT.print(F("HTTP LATENCY: ")); SERIAL_PORT.print(http_last_duration_ms); SERIAL_PORT.println(F(" ms"));
+      SERIAL_PORT.print(F("WRIST: ")); SERIAL_PORT.println(wrist_data.valid ? F("OK") : F("NO DATA"));
+      SERIAL_PORT.println(F("==================\n"));
       break;
-      
-    case 'h':
-    case 'H':
-    case '?':
-      SERIAL_PORT.println(F(""));
-      SERIAL_PORT.println(F("=== COMMANDS ==="));
-      SERIAL_PORT.println(F("c - Calibrate shoulder & elbow"));
-      SERIAL_PORT.println(F("    (Wrist calibrated on ESP32-C)"));
-      SERIAL_PORT.println(F("x - Clear saved calibration"));
-      SERIAL_PORT.println(F("p - Pause/Resume output"));
-      SERIAL_PORT.println(F("s - Show status & calibration"));
-      SERIAL_PORT.println(F("h - Help"));
-      SERIAL_PORT.println(F("================"));
-      SERIAL_PORT.println(F(""));
+    case 'h': case 'H': case '?':
+      SERIAL_PORT.println(F("\n=== COMMANDS ==="));
+      SERIAL_PORT.println(F("c=calibrate x=clear p=pause s=status h=help"));
+      SERIAL_PORT.println(F("================\n"));
       break;
   }
 }
@@ -737,52 +783,57 @@ void setup() {
   SERIAL_PORT.begin(115200);
   delay(500);
   
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.println(F("================================================"));
-  SERIAL_PORT.println(F("     VOMAS - ESP32-A MASTER v3.7                "));
-  SERIAL_PORT.println(F("     HTTP POST to Remote Server                 "));
-  SERIAL_PORT.println(F("================================================"));
-  SERIAL_PORT.println(F("Wrist angles received from ESP32-C slave"));
-  SERIAL_PORT.println(F("Peak velocity hold: 3-second windows"));
-  SERIAL_PORT.println(F("Calibration saved permanently (survives reboot)"));
-  SERIAL_PORT.println(F("================================================"));
+  SERIAL_PORT.println(F("\n================================================"));
+  SERIAL_PORT.println(F("     VOMAS - ESP32-A MASTER v3.9                "));
+  SERIAL_PORT.println(F("     REST API + Fast HTTP POST                  "));
+  SERIAL_PORT.println(F("================================================\n"));
 
-  // WiFi Setup (AP+STA mode for ESP-NOW + HTTP)
+  // Create mutex
+  dataMutex = xSemaphoreCreateMutex();
+
+  // WiFi Setup
   WiFi.mode(WIFI_AP_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   SERIAL_PORT.print(F("Connecting to WiFi"));
-  int wifi_attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && wifi_attempts < 20) {
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     SERIAL_PORT.print(".");
-    wifi_attempts++;
+    attempts++;
   }
   
   if (WiFi.status() == WL_CONNECTED) {
     wifi_connected = true;
     SERIAL_PORT.println(F(" CONNECTED!"));
-    SERIAL_PORT.print(F("IP_ADDRESS: "));
-    SERIAL_PORT.println(WiFi.localIP());
-    SERIAL_PORT.println(F(""));
+    SERIAL_PORT.print(F("IP: ")); SERIAL_PORT.println(WiFi.localIP());
+    
+    // Setup REST API endpoints
+    server.on("/api/data", HTTP_GET, handleGetData);
+    server.on("/api/data", HTTP_OPTIONS, handleOptions);
+    // Calibration endpoints removed - ESP32 now polls NestJS backend
+    server.onNotFound(handleNotFound);
+    server.begin();
+    
+    SERIAL_PORT.println(F("\n========================================"));
+    SERIAL_PORT.println(F("REST API ENDPOINTS:"));
+    SERIAL_PORT.print(F("  GET http://")); SERIAL_PORT.print(WiFi.localIP()); SERIAL_PORT.println(F("/api/data"));
+    SERIAL_PORT.print(F("  POLLING: ")); SERIAL_PORT.println(CALIBRATION_CHECK_URL);
     SERIAL_PORT.println(F("========================================"));
-    SERIAL_PORT.println(F("POSTING DATA TO:"));
-    SERIAL_PORT.println(SERVER_URL);
-    SERIAL_PORT.print(F("UPDATE RATE: ")); 
-    SERIAL_PORT.print(1000 / POST_INTERVAL_MS);
-    SERIAL_PORT.println(F(" Hz"));
-    SERIAL_PORT.println(F("========================================"));
-    SERIAL_PORT.println(F(""));
+    SERIAL_PORT.print(F("POSTING TO: ")); SERIAL_PORT.println(SERVER_URL);
+    SERIAL_PORT.println(F("========================================\n"));
+    
+    // Start HTTP POST task on Core 0
+    xTaskCreatePinnedToCore(httpTask, "HTTP_Task", 8192, NULL, 1, &httpTaskHandle, 0);
+    SERIAL_PORT.println(F("HTTP Task started on Core 0"));
   } else {
     wifi_connected = false;
-    SERIAL_PORT.println(F(" FAILED"));
-    SERIAL_PORT.println(F("HTTP POST disabled - check WiFi credentials"));
+    SERIAL_PORT.println(F(" FAILED - HTTP disabled"));
   }
   
-  SERIAL_PORT.print(F("MAC_ADDRESS: "));
-  SERIAL_PORT.println(WiFi.macAddress());
+  SERIAL_PORT.print(F("MAC: ")); SERIAL_PORT.println(WiFi.macAddress());
 
-  // ESP-NOW Setup
+  // ESP-NOW
   if (esp_now_init() != ESP_OK) {
     SERIAL_PORT.println(F("ESP_NOW: FAILED"));
     while(1) delay(1000);
@@ -790,18 +841,16 @@ void setup() {
   esp_now_register_recv_cb(onDataReceived);
   SERIAL_PORT.println(F("ESP_NOW: OK"));
 
-  // I2C Setup
-  WIRE_PORT.begin(21,22);
+  // I2C
+  WIRE_PORT.begin(21, 22);
   WIRE_PORT.setClock(I2C_SPEED);
 
-  // IMU-A Setup
-  SERIAL_PORT.print(F("IMU_A_INIT: "));
+  // IMU-A
+  SERIAL_PORT.print(F("IMU_A: "));
   imu_a.begin(WIRE_PORT, AD0_IMU_A);
   int retries = 0;
   while (imu_a.status != ICM_20948_Stat_Ok && retries < 10) {
-    delay(500);
-    imu_a.begin(WIRE_PORT, AD0_IMU_A);
-    retries++;
+    delay(500); imu_a.begin(WIRE_PORT, AD0_IMU_A); retries++;
   }
   if (imu_a.status == ICM_20948_Stat_Ok) {
     imu_a.initializeDMP();
@@ -809,18 +858,14 @@ void setup() {
     imu_a.setDMPODRrate(DMP_ODR_Reg_Quat6, 0);
     imu_a.enableFIFO(); imu_a.enableDMP(); imu_a.resetDMP(); imu_a.resetFIFO();
     SERIAL_PORT.println(F("OK"));
-  } else {
-    SERIAL_PORT.println(F("FAILED"));
-  }
+  } else { SERIAL_PORT.println(F("FAILED")); }
 
-  // IMU-B Setup
-  SERIAL_PORT.print(F("IMU_B_INIT: "));
+  // IMU-B
+  SERIAL_PORT.print(F("IMU_B: "));
   imu_b.begin(WIRE_PORT, AD0_IMU_B);
   retries = 0;
   while (imu_b.status != ICM_20948_Stat_Ok && retries < 10) {
-    delay(500);
-    imu_b.begin(WIRE_PORT, AD0_IMU_B);
-    retries++;
+    delay(500); imu_b.begin(WIRE_PORT, AD0_IMU_B); retries++;
   }
   if (imu_b.status == ICM_20948_Stat_Ok) {
     imu_b.initializeDMP();
@@ -828,11 +873,9 @@ void setup() {
     imu_b.setDMPODRrate(DMP_ODR_Reg_Quat6, 0);
     imu_b.enableFIFO(); imu_b.enableDMP(); imu_b.resetDMP(); imu_b.resetFIFO();
     SERIAL_PORT.println(F("OK"));
-  } else {
-    SERIAL_PORT.println(F("FAILED"));
-  }
+  } else { SERIAL_PORT.println(F("FAILED")); }
 
-  // Init velocity trackers
+  // Init trackers
   v_sh_r.init(); v_sh_p.init(); v_sh_y.init();
   v_el_r.init(); v_el_p.init(); v_el_y.init();
   v_wr_r.init(); v_wr_p.init(); v_wr_y.init();
@@ -841,32 +884,34 @@ void setup() {
   drift.warning_count = 0;
   peak_window_start = millis();
 
-  // Load calibration from NVS
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.print(F("Loading calibration from NVS... "));
-  
+  // Load calibration
+  SERIAL_PORT.print(F("Loading calibration... "));
   if (loadCalibrationFromNVS()) {
-    SERIAL_PORT.println(F("SUCCESS!"));
-    SERIAL_PORT.println(F("Using saved calibration data."));
+    SERIAL_PORT.println(F("OK"));
   } else {
-    SERIAL_PORT.println(F("NO SAVED DATA"));
-    SERIAL_PORT.println(F(""));
-    SERIAL_PORT.println(F("!!! NO CALIBRATION FOUND !!!"));
-    SERIAL_PORT.println(F("Press 'c' to calibrate"));
-    SERIAL_PORT.println(F(""));
+    SERIAL_PORT.println(F("NOT FOUND - Press 'c' or call /api/calibrate"));
   }
 
-  SERIAL_PORT.println(F(""));
-  SERIAL_PORT.println(F("================================================"));
-  SERIAL_PORT.println(F("WAITING FOR ESP32-C WRIST DATA..."));
-  SERIAL_PORT.println(F("COMMANDS: c=calibrate x=clear p=pause s=status"));
-  SERIAL_PORT.println(F("================================================"));
-  SERIAL_PORT.println(F(""));
+  SERIAL_PORT.println(F("\n================================================"));
+  SERIAL_PORT.println(F("COMMANDS: c=calibrate p=pause s=status h=help"));
+  SERIAL_PORT.println(F("================================================\n"));
 }
 
-// ============ MAIN LOOP ============
+// ============ MAIN LOOP (RUNS ON CORE 1) ============
 void loop() {
   handleCommands();
+  
+  // Handle HTTP server requests
+  if (wifi_connected) {
+    server.handleClient();
+  }
+  
+  // Check for calibration request from API
+  if (calibrationRequested) {
+    calibrationRequested = false;
+    calibrateZero();
+  }
+  
   sendTimeSync();
   checkWristConnection();
   
@@ -892,11 +937,10 @@ void loop() {
     imu_data[1].valid = true;
   }
   
-  // If not calibrated, show reminder
   if (!cal_data.calibrated) {
     static unsigned long last_reminder = 0;
     if (millis() - last_reminder > 5000) {
-      SERIAL_PORT.println(F("NOT_CALIBRATED - Press 'c' to calibrate"));
+      SERIAL_PORT.println(F("NOT_CALIBRATED - Press 'c' or call /api/calibrate"));
       last_reminder = millis();
     }
     delay(100);
@@ -909,51 +953,30 @@ void loop() {
   getWristAngles(wr_roll, wr_pitch, wr_yaw);
   
   // Update velocities
-  v_sh_r.update(sh_roll);
-  v_sh_p.update(sh_pitch);
-  v_sh_y.update(sh_yaw);
+  v_sh_r.update(sh_roll); v_sh_p.update(sh_pitch); v_sh_y.update(sh_yaw);
+  v_el_r.update(el_roll); v_el_p.update(el_pitch); v_el_y.update(el_yaw);
+  v_wr_r.update(wr_roll); v_wr_p.update(wr_pitch); v_wr_y.update(wr_yaw);
   
-  v_el_r.update(el_roll);
-  v_el_p.update(el_pitch);
-  v_el_y.update(el_yaw);
-  
-  v_wr_r.update(wr_roll);
-  v_wr_p.update(wr_pitch);
-  v_wr_y.update(wr_yaw);
-  
-  // Check drift
   checkDrift();
-  
-  // Update peak tracking
   updatePeaks();
   
-  // POST data to remote server
-  postDataToServer();
+  // Update shared data for HTTP POST task
+  updateSharedData();
   
   // Serial output
   if (output_enabled) {
-    SERIAL_PORT.print(F("SH_R:")); SERIAL_PORT.print((int)sh_roll);
-    SERIAL_PORT.print(F(" SH_P:")); SERIAL_PORT.print((int)sh_pitch);
-    SERIAL_PORT.print(F(" SH_Y:")); SERIAL_PORT.print((int)sh_yaw);
-    SERIAL_PORT.print(F(" PK_SR:")); SERIAL_PORT.print((int)peak_sh_r);
-    SERIAL_PORT.print(F(" PK_SP:")); SERIAL_PORT.print((int)peak_sh_p);
-    SERIAL_PORT.print(F(" PK_SY:")); SERIAL_PORT.print((int)peak_sh_y);
+    SERIAL_PORT.print(F("SH:")); SERIAL_PORT.print((int)sh_roll);
+    SERIAL_PORT.print(F(",")); SERIAL_PORT.print((int)sh_pitch);
+    SERIAL_PORT.print(F(",")); SERIAL_PORT.print((int)sh_yaw);
+    SERIAL_PORT.print(F(" EL:")); SERIAL_PORT.print((int)el_roll);
+    SERIAL_PORT.print(F(",")); SERIAL_PORT.print((int)el_pitch);
+    SERIAL_PORT.print(F(",")); SERIAL_PORT.print((int)el_yaw);
+    SERIAL_PORT.print(F(" WR:")); SERIAL_PORT.print((int)wr_roll);
+    SERIAL_PORT.print(F(",")); SERIAL_PORT.print((int)wr_pitch);
+    SERIAL_PORT.print(F(",")); SERIAL_PORT.print((int)wr_yaw);
+    SERIAL_PORT.print(F(" HTTP:")); SERIAL_PORT.print(http_last_duration_ms);
+    SERIAL_PORT.println(F("ms"));
     
-    SERIAL_PORT.print(F(" EL_R:")); SERIAL_PORT.print((int)el_roll);
-    SERIAL_PORT.print(F(" EL_P:")); SERIAL_PORT.print((int)el_pitch);
-    SERIAL_PORT.print(F(" EL_Y:")); SERIAL_PORT.print((int)el_yaw);
-    SERIAL_PORT.print(F(" PK_ER:")); SERIAL_PORT.print((int)peak_el_r);
-    SERIAL_PORT.print(F(" PK_EP:")); SERIAL_PORT.print((int)peak_el_p);
-    SERIAL_PORT.print(F(" PK_EY:")); SERIAL_PORT.print((int)peak_el_y);
-    
-    SERIAL_PORT.print(F(" WR_R:")); SERIAL_PORT.print((int)wr_roll);
-    SERIAL_PORT.print(F(" WR_P:")); SERIAL_PORT.print((int)wr_pitch);
-    SERIAL_PORT.print(F(" WR_Y:")); SERIAL_PORT.print((int)wr_yaw);
-    SERIAL_PORT.print(F(" PK_WR:")); SERIAL_PORT.print((int)peak_wr_r);
-    SERIAL_PORT.print(F(" PK_WP:")); SERIAL_PORT.print((int)peak_wr_p);
-    SERIAL_PORT.print(F(" PK_WY:")); SERIAL_PORT.println((int)peak_wr_y);
-    
-    // Reset peaks every 3 seconds
     if (millis() - peak_window_start >= PEAK_HOLD_MS) {
       resetPeaks();
     }

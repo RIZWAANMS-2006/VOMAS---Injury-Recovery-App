@@ -16,7 +16,7 @@ npm run start:prod
 # Run tests
 npm test
 
-# Server runs on: http://localhost:3000
+# Server runs on: https://vomas-injury-recovery-app.onrender.com
 ```
 
 ## API Endpoints
@@ -100,7 +100,7 @@ The following actions are supported:
 ### Create Activity
 
 ```bash
-curl -X POST http://localhost:3000/api/activities \
+curl -X POST https://vomas-injury-recovery-app.onrender.com/api/activities \
   -H "Content-Type: application/json" \
   -d '{"actionName": "Flexion / Extension"}'
 ```
@@ -125,7 +125,7 @@ curl -X POST http://localhost:3000/api/activities \
 ### Create Activity (Invalid Action)
 
 ```bash
-curl -X POST http://localhost:3000/api/activities \
+curl -X POST https://vomas-injury-recovery-app.onrender.com/api/activities \
   -H "Content-Type: application/json" \
   -d '{"actionName": "Invalid Action"}'
 ```
@@ -144,7 +144,7 @@ curl -X POST http://localhost:3000/api/activities \
 ### Get Activities
 
 ```bash
-curl http://localhost:3000/api/activities
+curl https://vomas-injury-recovery-app.onrender.com/api/activities
 ```
 
 **Response:**
@@ -165,7 +165,7 @@ curl http://localhost:3000/api/activities
 ### Get Action Mappings
 
 ```bash
-curl http://localhost:3000/api/actions
+curl https://vomas-injury-recovery-app.onrender.com/api/actions
 ```
 
 **Response:**
@@ -186,7 +186,7 @@ curl http://localhost:3000/api/actions
 ### Post Angles
 
 ```bash
-curl -X POST http://localhost:3000/VOMAS/angles \
+curl -X POST https://vomas-injury-recovery-app.onrender.com/VOMAS/angles \
   -H "Content-Type: application/json" \
   -d '{"shoulder": 65.2, "elbow": 32.1, "wrist": 12.4}'
 ```
