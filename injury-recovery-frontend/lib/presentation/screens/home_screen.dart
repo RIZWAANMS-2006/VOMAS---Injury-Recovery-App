@@ -6,26 +6,32 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:VOMAS/bloc/home/home_bloc.dart';
 import 'package:VOMAS/bloc/home/home_event.dart';
 import 'package:VOMAS/bloc/home/home_state.dart';
-import 'package:VOMAS/data/models/action_type.dart';
+import 'package:VOMAS/data/services/excel_export_service.dart';
 import 'package:VOMAS/presentation/screens/measurement_screen.dart';
 import 'package:VOMAS/presentation/widgets/action_card.dart';
 import 'package:VOMAS/presentation/widgets/activity_history_card.dart';
 
 /// The main home screen of the app
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+  final String userId;
+  final String userName;
+
+  const HomeScreen({super.key, required this.userId, required this.userName});
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => HomeBloc()..add(const LoadHistoryRequested()),
-      child: const _HomeScreenContent(),
+      create: (_) =>
+          HomeBloc(userId: userId)..add(const LoadHistoryRequested()),
+      child: _HomeScreenContent(userName: userName),
     );
   }
 }
 
 class _HomeScreenContent extends StatelessWidget {
-  const _HomeScreenContent();
+  final String userName;
+
+  const _HomeScreenContent({required this.userName});
 
   @override
   Widget build(BuildContext context) {
@@ -96,8 +102,16 @@ class _HomeScreenContent extends StatelessWidget {
       snap: true,
       expandedHeight: 100,
       backgroundColor: theme.scaffoldBackgroundColor,
+      leading: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          tooltip: 'Switch User',
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
       flexibleSpace: FlexibleSpaceBar(
-        titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
+        titlePadding: const EdgeInsets.only(left: 60, bottom: 16),
         title: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -109,20 +123,39 @@ class _HomeScreenContent extends StatelessWidget {
                 fontSize: 24,
               ),
             ),
+            Text(
+              userName,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF4A90E2),
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
           ],
         ),
       ),
       actions: [
         BlocBuilder<HomeBloc, HomeState>(
           builder: (context, state) {
-            if (state.hasHistory) {
-              return IconButton(
-                icon: const Icon(Icons.delete_sweep_rounded),
-                tooltip: 'Clear History',
-                onPressed: () => _showClearHistoryDialog(context),
-              );
-            }
-            return const SizedBox.shrink();
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Export button
+                if (state.hasHistory)
+                  IconButton(
+                    icon: const Icon(Icons.file_download_outlined),
+                    tooltip: 'Export to Excel',
+                    onPressed: () => _exportHistory(context, state),
+                  ),
+                // Clear history button
+                if (state.hasHistory)
+                  IconButton(
+                    icon: const Icon(Icons.delete_sweep_rounded),
+                    tooltip: 'Clear History',
+                    onPressed: () => _showClearHistoryDialog(context),
+                  ),
+              ],
+            );
           },
         ),
         const SizedBox(width: 8),
@@ -281,6 +314,70 @@ class _HomeScreenContent extends StatelessWidget {
         },
       ),
     );
+  }
+
+  void _exportHistory(BuildContext context, HomeState state) async {
+    if (!state.hasHistory) return;
+
+    // Show loading indicator
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(width: 12),
+            Text('Generating Excel file...'),
+          ],
+        ),
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    try {
+      final exportService = ExcelExportService();
+      final filePath = await exportService.exportHistory(
+        state.history,
+        userName,
+      );
+
+      if (!context.mounted) return;
+
+      // Clear the loading snackbar
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      // Show success with open option
+      final fileName = filePath.split('/').last;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ Exported: $fileName'),
+          duration: const Duration(seconds: 5),
+          backgroundColor: Colors.green,
+          action: SnackBarAction(
+            label: 'Open',
+            textColor: Colors.white,
+            onPressed: () {
+              ExcelExportService.openFile(filePath);
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Export failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   void _showClearHistoryDialog(BuildContext context) {

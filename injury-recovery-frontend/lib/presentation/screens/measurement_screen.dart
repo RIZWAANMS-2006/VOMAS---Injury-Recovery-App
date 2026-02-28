@@ -56,7 +56,7 @@ class _MeasurementScreenContentState extends State<_MeasurementScreenContent> {
 
   @override
   Widget build(BuildContext context) {
-    final measurement = getMeasurementForAction(widget.actionType);
+    getMeasurementForAction(widget.actionType);
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
     final gradientColors = widget.actionType.gradientColors;

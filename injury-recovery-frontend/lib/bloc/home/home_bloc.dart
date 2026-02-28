@@ -11,9 +11,12 @@ import 'home_state.dart';
 class HomeBloc extends Bloc<HomeEvent, HomeState> {
   final ActivityHistoryService _historyService;
 
-  HomeBloc({ActivityHistoryService? historyService})
+  HomeBloc({ActivityHistoryService? historyService, required String userId})
     : _historyService = historyService ?? ActivityHistoryService(),
       super(const HomeState()) {
+    // Set the user ID for scoped history storage
+    _historyService.setUserId(userId);
+
     on<LoadHistoryRequested>(_onLoadHistoryRequested);
     on<ActionSelected>(_onActionSelected);
     on<ClearHistoryRequested>(_onClearHistoryRequested);

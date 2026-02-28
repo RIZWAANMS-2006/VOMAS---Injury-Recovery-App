@@ -4,7 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:VOMAS/core/theme/app_theme.dart';
-import 'package:VOMAS/presentation/screens/home_screen.dart';
+import 'package:VOMAS/presentation/screens/user_selection_screen.dart';
 
 void main() async {
   // Ensure Flutter bindings are initialized
@@ -45,7 +45,7 @@ class VOMASApp extends StatelessWidget {
       themeMode:
           ThemeMode.system, // Automatically switch based on device setting
       // Home screen
-      home: const HomeScreen(),
+      home: const UserSelectionScreen(),
 
       // Custom page transitions
       builder: (context, child) {

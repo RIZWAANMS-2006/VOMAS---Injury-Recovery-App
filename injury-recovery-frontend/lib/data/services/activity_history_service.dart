@@ -8,8 +8,9 @@ import 'activity_api_service.dart';
 
 /// Service for managing activity history persistence
 /// Primary: Backend API, Fallback: Local SharedPreferences
+/// History is scoped per-user via userId
 class ActivityHistoryService {
-  static const String _storageKey = 'activity_history';
+  static const String _storageKeyPrefix = 'activity_history';
   static const int _maxHistoryItems = 100;
 
   SharedPreferences? _prefs;
@@ -17,6 +18,9 @@ class ActivityHistoryService {
 
   // Flag to track if backend is available
   bool _backendAvailable = true;
+
+  // Current user ID for scoped storage
+  String? _userId;
 
   // Singleton pattern
   ActivityHistoryService._internal() : _apiService = ActivityApiService();
@@ -26,6 +30,19 @@ class ActivityHistoryService {
 
   // For testing - allows injection
   ActivityHistoryService.withApiService(this._apiService);
+
+  /// Get the storage key for the current user
+  String get _storageKey {
+    if (_userId != null && _userId!.isNotEmpty) {
+      return '${_storageKeyPrefix}_$_userId';
+    }
+    return _storageKeyPrefix;
+  }
+
+  /// Set the current user ID for scoped history
+  void setUserId(String userId) {
+    _userId = userId;
+  }
 
   /// Initialize SharedPreferences instance
   Future<void> init() async {
@@ -41,40 +58,51 @@ class ActivityHistoryService {
   }
 
   /// Get all activity history items, sorted by most recent first
-  /// Tries backend first, falls back to local storage
+  /// Uses local storage only when userId is set (backend is not user-aware)
   Future<List<ActivityHistoryItem>> getHistory() async {
-    // Try backend first
+    // Backend is NOT user-scoped, so skip it when we have a userId
+    // to ensure each user only sees their own history
+    if (_userId != null && _userId!.isNotEmpty) {
+      return _getFromLocalStorage();
+    }
+
+    // Only use backend when no user scoping is active (legacy mode)
     if (_backendAvailable) {
       try {
         final backendHistory = await _apiService.getActivities();
         if (backendHistory.isNotEmpty) {
-          // Save to local cache
           await _saveToLocalStorage(backendHistory);
           return backendHistory;
         }
       } catch (e) {
-        // Backend failed, mark as unavailable
         _backendAvailable = false;
         // ignore: avoid_print
         print('Backend unavailable, using local storage: $e');
       }
     }
 
-    // Fallback to local storage
     return _getFromLocalStorage();
   }
 
   /// Add a new activity to history
-  /// Tries backend first, falls back to local storage
+  /// Uses local-only when userId is set (backend is not user-aware)
   Future<ActivityHistoryItem?> addActivity(ActionType actionType) async {
     ActivityHistoryItem? newItem;
 
-    // Try backend first
+    // When user-scoped, skip backend entirely — save locally only
+    if (_userId != null && _userId!.isNotEmpty) {
+      newItem = ActivityHistoryItem.fromAction(actionType);
+      final localHistory = await _getFromLocalStorage();
+      localHistory.insert(0, newItem);
+      await _saveToLocalStorage(localHistory.take(_maxHistoryItems).toList());
+      return newItem;
+    }
+
+    // Legacy mode: try backend first
     if (_backendAvailable) {
       try {
         newItem = await _apiService.createActivity(actionType);
         if (newItem != null) {
-          // Update local cache
           final localHistory = await _getFromLocalStorage();
           localHistory.insert(0, newItem);
           await _saveToLocalStorage(
@@ -84,7 +112,6 @@ class ActivityHistoryService {
           return newItem;
         }
       } catch (e) {
-        // Backend failed, mark as unavailable
         _backendAvailable = false;
         // ignore: avoid_print
         print('Backend unavailable for create, using local storage: $e');
