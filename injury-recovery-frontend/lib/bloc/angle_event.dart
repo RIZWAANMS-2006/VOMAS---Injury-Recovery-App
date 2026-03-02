@@ -1,12 +1,14 @@
 import 'package:VOMAS/data/models/angles.dart';
 import 'package:VOMAS/data/models/vomas_task.dart';
+import 'package:VOMAS/data/models/action_type.dart';
 
 abstract class AngleEvent {}
 
 class ConnectRequested implements AngleEvent {
   final String serverUrl;
   final String? actionName; // Action to register after connecting
-  ConnectRequested(this.serverUrl, {this.actionName});
+  final ActionType? actionType; // ActionType for session tracking
+  ConnectRequested(this.serverUrl, {this.actionName, this.actionType});
 }
 
 class DisconnectRequested implements AngleEvent {}

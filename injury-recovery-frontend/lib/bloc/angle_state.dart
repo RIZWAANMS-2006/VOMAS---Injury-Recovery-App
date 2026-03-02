@@ -12,6 +12,8 @@ class AngleState {
   final VomasTask? selectedTask;
   final DateTime? timestamp;
   final String? selectedAction;
+  final bool sessionActive;
+  final int sessionReadings;
 
   const AngleState({
     this.connectionStatus = ConnectionStatus.initial,
@@ -22,6 +24,8 @@ class AngleState {
     this.selectedTask,
     this.timestamp,
     this.selectedAction,
+    this.sessionActive = false,
+    this.sessionReadings = 0,
   });
 
   AngleState copyWith({
@@ -33,6 +37,8 @@ class AngleState {
     VomasTask? selectedTask,
     DateTime? timestamp,
     String? selectedAction,
+    bool? sessionActive,
+    int? sessionReadings,
   }) {
     return AngleState(
       connectionStatus: connectionStatus ?? this.connectionStatus,
@@ -43,6 +49,8 @@ class AngleState {
       selectedTask: selectedTask ?? this.selectedTask,
       timestamp: timestamp ?? this.timestamp,
       selectedAction: selectedAction ?? this.selectedAction,
+      sessionActive: sessionActive ?? this.sessionActive,
+      sessionReadings: sessionReadings ?? this.sessionReadings,
     );
   }
 

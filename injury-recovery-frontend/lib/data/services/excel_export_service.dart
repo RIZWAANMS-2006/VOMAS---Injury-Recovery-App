@@ -1,5 +1,5 @@
 // lib/data/services/excel_export_service.dart
-// Service for exporting activity history to Excel files
+// Service for exporting activity history to Excel files with session data
 
 import 'dart:io';
 import 'package:excel/excel.dart';
@@ -47,56 +47,174 @@ class ExcelExportService {
       )
       ..cellStyle = CellStyle(fontSize: 10);
 
-    // Headers
-    final headers = ['#', 'Name', 'Action', 'Measurements', 'Date', 'Time'];
+    // Headers: S.No, Name, Action, Shoulder, Elbow, Wrist, Time, Duration
+    final headers = [
+      'S.No',
+      'Name',
+      'Action',
+      'Shoulder',
+      'Elbow',
+      'Wrist',
+      'Time',
+      'Duration',
+    ];
     for (var i = 0; i < headers.length; i++) {
       sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 3))
         ..value = TextCellValue(headers[i])
         ..cellStyle = headerStyle;
     }
 
-    // Data rows
-    for (var i = 0; i < history.length; i++) {
-      final item = history[i];
-      final rowIndex = i + 4;
+    // Data rows — each data point as a row, grouped by session
+    var rowIndex = 4;
+    for (var sessionIdx = 0; sessionIdx < history.length; sessionIdx++) {
+      final item = history[sessionIdx];
+      final sessionNum = sessionIdx + 1;
 
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex))
-        ..value = IntCellValue(i + 1)
-        ..cellStyle = dataStyle;
+      if (item.dataPoints.isEmpty) {
+        // Session with no data points — show one summary row
+        _writeSessionRow(
+          sheet: sheet,
+          rowIndex: rowIndex,
+          sessionNum: sessionNum,
+          userName: userName,
+          actionName: item.actionType.displayName,
+          showSessionInfo: true,
+          shoulder: '',
+          elbow: '',
+          wrist: '',
+          time: _formatTime(item.timestamp),
+          duration: item.formattedDuration,
+          dataStyle: dataStyle,
+        );
+        rowIndex++;
+      } else {
+        // Session with data points — one row per data point
+        final midIndex = item.dataPoints.length ~/ 2;
 
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex))
-        ..value = TextCellValue(userName)
-        ..cellStyle = dataStyle;
+        for (var dpIdx = 0; dpIdx < item.dataPoints.length; dpIdx++) {
+          final dp = item.dataPoints[dpIdx];
+          final isMiddleRow = dpIdx == midIndex;
+          final isLastRow = dpIdx == item.dataPoints.length - 1;
 
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex))
-        ..value = TextCellValue(item.actionType.displayName)
-        ..cellStyle = dataStyle;
+          _writeSessionRow(
+            sheet: sheet,
+            rowIndex: rowIndex,
+            sessionNum: isMiddleRow ? sessionNum : null,
+            userName: userName,
+            actionName: isMiddleRow ? item.actionType.displayName : null,
+            showSessionInfo: isMiddleRow,
+            shoulder:
+                'angle:${dp.shoulderAngle.toStringAsFixed(1)} speed:${dp.shoulderSpeed.toStringAsFixed(1)}',
+            elbow:
+                'angle:${dp.elbowAngle.toStringAsFixed(1)} speed:${dp.elbowSpeed.toStringAsFixed(1)}',
+            wrist:
+                'angle:${dp.wristAngle.toStringAsFixed(1)} speed:${dp.wristSpeed.toStringAsFixed(1)}',
+            time: _formatTimeWithSeconds(dp.recordedAt),
+            duration: isLastRow ? item.formattedDuration : null,
+            dataStyle: dataStyle,
+          );
+          rowIndex++;
+        }
+      }
 
-      final measurementStr = item.measurements.entries
-          .map((e) => '${e.key}: ${e.value}')
-          .join(', ');
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIndex))
-        ..value = TextCellValue(measurementStr)
-        ..cellStyle = dataStyle;
-
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex))
-        ..value = TextCellValue(item.formattedDate)
-        ..cellStyle = dataStyle;
-
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex))
-        ..value = TextCellValue(item.formattedTime)
-        ..cellStyle = dataStyle;
+      // Add blank row between sessions for visual separation
+      if (sessionIdx < history.length - 1) {
+        rowIndex++;
+      }
     }
 
     // Column widths
-    sheet.setColumnWidth(0, 6);
-    sheet.setColumnWidth(1, 20);
-    sheet.setColumnWidth(2, 35);
-    sheet.setColumnWidth(3, 40);
-    sheet.setColumnWidth(4, 18);
-    sheet.setColumnWidth(5, 12);
+    sheet.setColumnWidth(0, 8); // S.No
+    sheet.setColumnWidth(1, 15); // Name
+    sheet.setColumnWidth(2, 35); // Action
+    sheet.setColumnWidth(3, 30); // Shoulder
+    sheet.setColumnWidth(4, 30); // Elbow
+    sheet.setColumnWidth(5, 30); // Wrist
+    sheet.setColumnWidth(6, 15); // Time
+    sheet.setColumnWidth(7, 15); // Duration
 
     return _saveExcel(excel, 'VOMAS_${userName.replaceAll(' ', '_')}');
+  }
+
+  /// Write a single row to the session data sheet
+  void _writeSessionRow({
+    required Sheet sheet,
+    required int rowIndex,
+    required int? sessionNum,
+    required String userName,
+    required String? actionName,
+    required bool showSessionInfo,
+    required String shoulder,
+    required String elbow,
+    required String wrist,
+    required String time,
+    required String? duration,
+    required CellStyle dataStyle,
+  }) {
+    // S.No — only on the middle row of each session
+    if (sessionNum != null) {
+      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex))
+        ..value = IntCellValue(sessionNum)
+        ..cellStyle = dataStyle;
+    }
+
+    // Name — every row
+    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex))
+      ..value = TextCellValue(userName)
+      ..cellStyle = dataStyle;
+
+    // Action — only on the middle row of each session
+    if (actionName != null) {
+      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex))
+        ..value = TextCellValue(actionName)
+        ..cellStyle = dataStyle;
+    }
+
+    // Shoulder
+    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIndex))
+      ..value = TextCellValue(shoulder)
+      ..cellStyle = dataStyle;
+
+    // Elbow
+    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex))
+      ..value = TextCellValue(elbow)
+      ..cellStyle = dataStyle;
+
+    // Wrist
+    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex))
+      ..value = TextCellValue(wrist)
+      ..cellStyle = dataStyle;
+
+    // Time
+    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIndex))
+      ..value = TextCellValue(time)
+      ..cellStyle = dataStyle;
+
+    // Duration — only on last row of each session
+    if (duration != null) {
+      sheet.cell(CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIndex))
+        ..value = TextCellValue(duration)
+        ..cellStyle = dataStyle;
+    }
+  }
+
+  /// Format time as "h:mm PM"
+  String _formatTime(DateTime dt) {
+    final hour = dt.hour > 12 ? dt.hour - 12 : dt.hour;
+    final displayHour = hour == 0 ? 12 : hour;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final period = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$displayHour:$minute $period';
+  }
+
+  /// Format time with seconds as "h:mm:ss PM"
+  String _formatTimeWithSeconds(DateTime dt) {
+    final hour = dt.hour > 12 ? dt.hour - 12 : dt.hour;
+    final displayHour = hour == 0 ? 12 : hour;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final second = dt.second.toString().padLeft(2, '0');
+    final period = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$displayHour:$minute:$second $period';
   }
 
   /// Export ALL users' history into a single Excel file
@@ -138,7 +256,16 @@ class ExcelExportService {
       ..cellStyle = CellStyle(fontSize: 10);
 
     // Headers
-    final headers = ['#', 'Name', 'Action', 'Measurements', 'Date', 'Time'];
+    final headers = [
+      'S.No',
+      'Name',
+      'Action',
+      'Shoulder',
+      'Elbow',
+      'Wrist',
+      'Time',
+      'Duration',
+    ];
     for (var i = 0; i < headers.length; i++) {
       sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 3))
         ..value = TextCellValue(headers[i])
@@ -146,66 +273,78 @@ class ExcelExportService {
     }
 
     // Collect all users' history
-    var rowCounter = 0;
+    var rowIndex = 4;
+    var sessionCounter = 0;
+
     for (final user in users) {
       historyService.setUserId(user.id);
       final history = await historyService.getHistory();
 
-      for (final item in history) {
-        final rowIndex = rowCounter + 4;
+      for (var sessionIdx = 0; sessionIdx < history.length; sessionIdx++) {
+        final item = history[sessionIdx];
+        sessionCounter++;
 
-        sheet.cell(
-            CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex),
-          )
-          ..value = IntCellValue(rowCounter + 1)
-          ..cellStyle = dataStyle;
+        if (item.dataPoints.isEmpty) {
+          _writeSessionRow(
+            sheet: sheet,
+            rowIndex: rowIndex,
+            sessionNum: sessionCounter,
+            userName: user.name,
+            actionName: item.actionType.displayName,
+            showSessionInfo: true,
+            shoulder: '',
+            elbow: '',
+            wrist: '',
+            time: _formatTime(item.timestamp),
+            duration: item.formattedDuration,
+            dataStyle: dataStyle,
+          );
+          rowIndex++;
+        } else {
+          final midIndex = item.dataPoints.length ~/ 2;
 
-        sheet.cell(
-            CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex),
-          )
-          ..value = TextCellValue(user.name)
-          ..cellStyle = dataStyle;
+          for (var dpIdx = 0; dpIdx < item.dataPoints.length; dpIdx++) {
+            final dp = item.dataPoints[dpIdx];
+            final isMiddleRow = dpIdx == midIndex;
+            final isLastRow = dpIdx == item.dataPoints.length - 1;
 
-        sheet.cell(
-            CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex),
-          )
-          ..value = TextCellValue(item.actionType.displayName)
-          ..cellStyle = dataStyle;
+            _writeSessionRow(
+              sheet: sheet,
+              rowIndex: rowIndex,
+              sessionNum: isMiddleRow ? sessionCounter : null,
+              userName: user.name,
+              actionName: isMiddleRow ? item.actionType.displayName : null,
+              showSessionInfo: isMiddleRow,
+              shoulder:
+                  'angle:${dp.shoulderAngle.toStringAsFixed(1)} speed:${dp.shoulderSpeed.toStringAsFixed(1)}',
+              elbow:
+                  'angle:${dp.elbowAngle.toStringAsFixed(1)} speed:${dp.elbowSpeed.toStringAsFixed(1)}',
+              wrist:
+                  'angle:${dp.wristAngle.toStringAsFixed(1)} speed:${dp.wristSpeed.toStringAsFixed(1)}',
+              time: _formatTimeWithSeconds(dp.recordedAt),
+              duration: isLastRow ? item.formattedDuration : null,
+              dataStyle: dataStyle,
+            );
+            rowIndex++;
+          }
+        }
 
-        final measurementStr = item.measurements.entries
-            .map((e) => '${e.key}: ${e.value}')
-            .join(', ');
-        sheet.cell(
-            CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIndex),
-          )
-          ..value = TextCellValue(measurementStr)
-          ..cellStyle = dataStyle;
-
-        sheet.cell(
-            CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex),
-          )
-          ..value = TextCellValue(item.formattedDate)
-          ..cellStyle = dataStyle;
-
-        sheet.cell(
-            CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex),
-          )
-          ..value = TextCellValue(item.formattedTime)
-          ..cellStyle = dataStyle;
-
-        rowCounter++;
+        // Blank row between sessions
+        rowIndex++;
       }
     }
 
-    if (rowCounter == 0) throw Exception('No history found for any user');
+    if (sessionCounter == 0) throw Exception('No history found for any user');
 
     // Column widths
-    sheet.setColumnWidth(0, 6);
-    sheet.setColumnWidth(1, 20);
+    sheet.setColumnWidth(0, 8);
+    sheet.setColumnWidth(1, 15);
     sheet.setColumnWidth(2, 35);
-    sheet.setColumnWidth(3, 40);
-    sheet.setColumnWidth(4, 18);
-    sheet.setColumnWidth(5, 12);
+    sheet.setColumnWidth(3, 30);
+    sheet.setColumnWidth(4, 30);
+    sheet.setColumnWidth(5, 30);
+    sheet.setColumnWidth(6, 15);
+    sheet.setColumnWidth(7, 15);
 
     return _saveExcel(excel, 'VOMAS_All_Users');
   }

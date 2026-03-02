@@ -1,12 +1,69 @@
 // lib/data/models/activity_history_item.dart
-// Model for storing activity history entries
+// Model for storing activity history entries with session data
 
 import 'dart:convert';
 
 import 'action_type.dart';
 import 'action_measurement_mapping.dart';
 
-/// Represents a single activity history entry
+/// A single data point recorded during a session
+class SessionDataPoint {
+  /// Angle values for each joint
+  final double shoulderAngle;
+  final double elbowAngle;
+  final double wristAngle;
+
+  /// Speed values for each joint
+  final double shoulderSpeed;
+  final double elbowSpeed;
+  final double wristSpeed;
+
+  /// When this data point was recorded
+  final DateTime recordedAt;
+
+  const SessionDataPoint({
+    required this.shoulderAngle,
+    required this.shoulderSpeed,
+    required this.elbowAngle,
+    required this.elbowSpeed,
+    required this.wristAngle,
+    required this.wristSpeed,
+    required this.recordedAt,
+  });
+
+  /// Create from JSON
+  factory SessionDataPoint.fromJson(Map<String, dynamic> json) {
+    return SessionDataPoint(
+      shoulderAngle: (json['shoulderAngle'] as num).toDouble(),
+      shoulderSpeed: (json['shoulderSpeed'] as num).toDouble(),
+      elbowAngle: (json['elbowAngle'] as num).toDouble(),
+      elbowSpeed: (json['elbowSpeed'] as num).toDouble(),
+      wristAngle: (json['wristAngle'] as num).toDouble(),
+      wristSpeed: (json['wristSpeed'] as num).toDouble(),
+      recordedAt: DateTime.parse(json['recordedAt'] as String),
+    );
+  }
+
+  /// Convert to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'shoulderAngle': shoulderAngle,
+      'shoulderSpeed': shoulderSpeed,
+      'elbowAngle': elbowAngle,
+      'elbowSpeed': elbowSpeed,
+      'wristAngle': wristAngle,
+      'wristSpeed': wristSpeed,
+      'recordedAt': recordedAt.toIso8601String(),
+    };
+  }
+
+  @override
+  String toString() {
+    return 'SessionDataPoint(sh:$shoulderAngle/$shoulderSpeed, el:$elbowAngle/$elbowSpeed, wr:$wristAngle/$wristSpeed)';
+  }
+}
+
+/// Represents a single activity history entry (session-based)
 class ActivityHistoryItem {
   /// Unique identifier for this history item
   final String id;
@@ -20,8 +77,14 @@ class ActivityHistoryItem {
   /// The measurement configuration for this action
   final Map<String, String> measurements;
 
-  /// When this activity was recorded
+  /// When the session started (Connect pressed)
   final DateTime timestamp;
+
+  /// When the session ended (Stop/Back pressed), null if still active
+  final DateTime? endTime;
+
+  /// All data points recorded during this session
+  final List<SessionDataPoint> dataPoints;
 
   ActivityHistoryItem({
     required this.id,
@@ -29,10 +92,37 @@ class ActivityHistoryItem {
     String? actionName,
     required this.measurements,
     required this.timestamp,
-  }) : actionName = actionName ?? actionType.displayName;
+    this.endTime,
+    List<SessionDataPoint>? dataPoints,
+  }) : actionName = actionName ?? actionType.displayName,
+       dataPoints = dataPoints ?? [];
 
-  /// Factory constructor to create from ActionType (local creation)
-  factory ActivityHistoryItem.fromAction(ActionType action) {
+  /// Session duration (null if session not finalized)
+  Duration? get duration {
+    if (endTime == null) return null;
+    return endTime!.difference(timestamp);
+  }
+
+  /// Formatted duration string (e.g., "2m 30s")
+  String get formattedDuration {
+    final d = duration;
+    if (d == null) return 'In progress';
+    final minutes = d.inMinutes;
+    final seconds = d.inSeconds % 60;
+    if (minutes > 0) {
+      return '${minutes}m ${seconds}s';
+    }
+    return '${seconds}s';
+  }
+
+  /// Number of data points recorded
+  int get readingsCount => dataPoints.length;
+
+  /// Whether this session has been finalized
+  bool get isFinalized => endTime != null;
+
+  /// Factory constructor to create from ActionType (session start)
+  factory ActivityHistoryItem.startSession(ActionType action) {
     final measurement = getMeasurementForAction(action);
     return ActivityHistoryItem(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -40,6 +130,25 @@ class ActivityHistoryItem {
       actionName: action.displayName,
       measurements: measurement.toDisplayMap(),
       timestamp: DateTime.now(),
+      dataPoints: [],
+    );
+  }
+
+  /// Legacy factory for backward compatibility
+  factory ActivityHistoryItem.fromAction(ActionType action) {
+    return ActivityHistoryItem.startSession(action);
+  }
+
+  /// Creates a finalized copy with endTime set
+  ActivityHistoryItem finalize() {
+    return ActivityHistoryItem(
+      id: id,
+      actionType: actionType,
+      actionName: actionName,
+      measurements: measurements,
+      timestamp: timestamp,
+      endTime: DateTime.now(),
+      dataPoints: dataPoints,
     );
   }
 
@@ -57,6 +166,16 @@ class ActivityHistoryItem {
           ).displayName,
       measurements: Map<String, String>.from(json['measurements'] as Map),
       timestamp: DateTime.parse(json['timestamp'] as String),
+      endTime: json['endTime'] != null
+          ? DateTime.parse(json['endTime'] as String)
+          : null,
+      dataPoints: json['dataPoints'] != null
+          ? (json['dataPoints'] as List)
+                .map(
+                  (e) => SessionDataPoint.fromJson(e as Map<String, dynamic>),
+                )
+                .toList()
+          : [],
     );
   }
 
@@ -75,6 +194,16 @@ class ActivityHistoryItem {
       actionName: actionName,
       measurements: Map<String, String>.from(measurements),
       timestamp: DateTime.parse(json['timestamp'] as String),
+      endTime: json['endTime'] != null
+          ? DateTime.parse(json['endTime'] as String)
+          : null,
+      dataPoints: json['dataPoints'] != null
+          ? (json['dataPoints'] as List)
+                .map(
+                  (e) => SessionDataPoint.fromJson(e as Map<String, dynamic>),
+                )
+                .toList()
+          : [],
     );
   }
 
@@ -86,6 +215,8 @@ class ActivityHistoryItem {
       'actionName': actionName,
       'measurements': measurements,
       'timestamp': timestamp.toIso8601String(),
+      'endTime': endTime?.toIso8601String(),
+      'dataPoints': dataPoints.map((e) => e.toJson()).toList(),
     };
   }
 
@@ -122,7 +253,7 @@ class ActivityHistoryItem {
 
   @override
   String toString() {
-    return 'ActivityHistoryItem(action: ${actionType.displayName}, time: $formattedDateTime)';
+    return 'ActivityHistoryItem(action: ${actionType.displayName}, time: $formattedDateTime, readings: $readingsCount, duration: $formattedDuration)';
   }
 }
 

@@ -3,14 +3,18 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:VOMAS/bloc/angle_event.dart';
 import 'package:VOMAS/bloc/angle_state.dart';
 import 'package:VOMAS/data/models/angles.dart';
+import 'package:VOMAS/data/models/activity_history_item.dart';
 import 'package:VOMAS/data/models/vomas_tasks.dart';
 import 'package:VOMAS/data/services/angle_services.dart';
+import 'package:VOMAS/data/services/activity_history_service.dart';
 
 class AngleBloc extends Bloc<AngleEvent, AngleState> {
   final AngleService _angleService;
+  final ActivityHistoryService _historyService;
   StreamSubscription<Angles>? _angleSubscription;
 
-  AngleBloc(this._angleService) : super(const AngleState()) {
+  AngleBloc(this._angleService, this._historyService)
+    : super(const AngleState()) {
     on<ConnectRequested>(_onConnectRequested);
     on<DisconnectRequested>(_onDisconnectRequested);
     on<AnglesReceived>(_onAnglesReceived);
@@ -59,11 +63,18 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
         _angleService.selectAction(event.actionName!);
       }
 
+      // Start a new session for history recording
+      if (event.actionType != null) {
+        _historyService.startSession(event.actionType!);
+      }
+
       emit(
         state.copyWith(
           connectionStatus: ConnectionStatus.connected,
           isConnecting: false,
           connectionError: null,
+          sessionActive: true,
+          sessionReadings: 0,
         ),
       );
     } catch (e) {
@@ -81,12 +92,19 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
     DisconnectRequested event,
     Emitter<AngleState> emit,
   ) async {
+    // Finalize the session before disconnecting
+    if (_historyService.hasActiveSession) {
+      await _historyService.finalizeSession();
+    }
+
     _angleService.disconnect();
     emit(
       state.copyWith(
         connectionStatus: ConnectionStatus.disconnected,
         connectionError: null,
         latestAngles: null,
+        sessionActive: false,
+        sessionReadings: 0,
       ),
     );
   }
@@ -98,11 +116,27 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
     final currentAngles = event.angles;
     final isCorrect = _validateAngles(currentAngles);
 
+    // Record data point to session
+    if (_historyService.hasActiveSession) {
+      _historyService.recordDataPoint(
+        SessionDataPoint(
+          shoulderAngle: currentAngles.shoulder.angle,
+          shoulderSpeed: currentAngles.shoulder.speed,
+          elbowAngle: currentAngles.elbow.angle,
+          elbowSpeed: currentAngles.elbow.speed,
+          wristAngle: currentAngles.wrist.angle,
+          wristSpeed: currentAngles.wrist.speed,
+          recordedAt: DateTime.now(),
+        ),
+      );
+    }
+
     emit(
       state.copyWith(
         latestAngles: currentAngles,
         isCorrect: isCorrect,
         timestamp: DateTime.now(),
+        sessionReadings: _historyService.currentSessionReadings,
       ),
     );
   }
@@ -132,7 +166,10 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
 
   @override
   Future<void> close() {
-    // Cancel subscription but don't dispose the singleton service
+    // Finalize any active session before closing
+    if (_historyService.hasActiveSession) {
+      _historyService.finalizeSession();
+    }
     _angleSubscription?.cancel();
     _angleService.disconnect();
     return super.close();

@@ -12,6 +12,7 @@ import 'package:VOMAS/bloc/angle_event.dart';
 import 'package:VOMAS/bloc/angle_state.dart';
 import 'package:VOMAS/data/models/vomas_tasks.dart'; // Your predefined tasks
 import 'package:VOMAS/data/services/angle_services.dart';
+import 'package:VOMAS/data/services/activity_history_service.dart';
 
 class VomasTestScreen extends StatelessWidget {
   const VomasTestScreen({super.key});
@@ -19,7 +20,7 @@ class VomasTestScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => AngleBloc(AngleService()),
+      create: (_) => AngleBloc(AngleService(), ActivityHistoryService()),
       child: Scaffold(
         appBar: AppBar(
           title: Text('VOMAS Task Validator'),

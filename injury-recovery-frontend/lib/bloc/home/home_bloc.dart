@@ -24,6 +24,9 @@ class HomeBloc extends Bloc<HomeEvent, HomeState> {
     on<RefreshHistoryRequested>(_onRefreshHistoryRequested);
   }
 
+  /// Expose the history service for session management in MeasurementScreen
+  ActivityHistoryService get historyService => _historyService;
+
   /// Initialize the service and load history
   Future<void> _onLoadHistoryRequested(
     LoadHistoryRequested event,
@@ -46,33 +49,20 @@ class HomeBloc extends Bloc<HomeEvent, HomeState> {
     }
   }
 
-  /// Handle action selection - add to history and trigger navigation
+  /// Handle action selection - navigate to measurement screen only
+  /// History is now created on Connect in the MeasurementScreen/AngleBloc
   Future<void> _onActionSelected(
     ActionSelected event,
     Emitter<HomeState> emit,
   ) async {
-    try {
-      // Add the activity to history
-      final newItem = await _historyService.addActivityFromAction(
-        event.actionType,
-      );
+    // Only set navigation flag, do NOT create history here
+    // History will be created when user presses Connect in MeasurementScreen
+    emit(
+      state.copyWith(selectedAction: event.actionType, shouldNavigate: true),
+    );
 
-      // Update state with new history and navigation flag
-      final updatedHistory = [newItem, ...state.history];
-
-      emit(
-        state.copyWith(
-          history: updatedHistory,
-          selectedAction: event.actionType,
-          shouldNavigate: true,
-        ),
-      );
-
-      // Reset navigation flag after emitting
-      emit(state.copyWith(shouldNavigate: false, clearSelectedAction: false));
-    } catch (e) {
-      emit(state.copyWith(errorMessage: 'Failed to save activity: $e'));
-    }
+    // Reset navigation flag after emitting
+    emit(state.copyWith(shouldNavigate: false, clearSelectedAction: false));
   }
 
   /// Clear all history

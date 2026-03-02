@@ -40,11 +40,15 @@ class _HomeScreenContent extends StatelessWidget {
           current.shouldNavigate && current.selectedAction != null,
       listener: (context, state) {
         if (state.shouldNavigate && state.selectedAction != null) {
+          final homeBloc = context.read<HomeBloc>();
           Navigator.push(
             context,
             PageRouteBuilder(
               pageBuilder: (context, animation, secondaryAnimation) {
-                return MeasurementScreen(actionType: state.selectedAction!);
+                return MeasurementScreen(
+                  actionType: state.selectedAction!,
+                  historyService: homeBloc.historyService,
+                );
               },
               transitionsBuilder:
                   (context, animation, secondaryAnimation, child) {

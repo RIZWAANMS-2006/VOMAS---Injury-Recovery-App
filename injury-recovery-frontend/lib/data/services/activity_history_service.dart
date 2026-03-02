@@ -1,5 +1,5 @@
 // lib/data/services/activity_history_service.dart
-// Service for persisting activity history with backend sync and local fallback
+// Service for persisting activity history with session management
 
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/activity_history_item.dart';
@@ -7,8 +7,7 @@ import '../models/action_type.dart';
 import 'activity_api_service.dart';
 
 /// Service for managing activity history persistence
-/// Primary: Backend API, Fallback: Local SharedPreferences
-/// History is scoped per-user via userId
+/// Supports session lifecycle: start → record data points → finalize
 class ActivityHistoryService {
   static const String _storageKeyPrefix = 'activity_history';
   static const int _maxHistoryItems = 100;
@@ -21,6 +20,16 @@ class ActivityHistoryService {
 
   // Current user ID for scoped storage
   String? _userId;
+
+  // ============ SESSION STATE ============
+  /// The currently active session (null when no session is running)
+  ActivityHistoryItem? _currentSession;
+
+  /// Whether a session is currently active
+  bool get hasActiveSession => _currentSession != null;
+
+  /// Current session's data point count
+  int get currentSessionReadings => _currentSession?.readingsCount ?? 0;
 
   // Singleton pattern
   ActivityHistoryService._internal() : _apiService = ActivityApiService();
@@ -57,11 +66,71 @@ class ActivityHistoryService {
     return _prefs!;
   }
 
+  // ============ SESSION LIFECYCLE ============
+
+  /// Start a new recording session when user presses Connect
+  /// Creates an ActivityHistoryItem with startTime = now, empty dataPoints
+  ActivityHistoryItem startSession(ActionType actionType) {
+    // If there's an active session that wasn't finalized, finalize it first
+    if (_currentSession != null) {
+      print('⚠️ Previous session was not finalized, auto-finalizing');
+      finalizeSession();
+    }
+
+    _currentSession = ActivityHistoryItem.startSession(actionType);
+    print(
+      '🟢 Session started: ${actionType.displayName} at ${_currentSession!.formattedTime}',
+    );
+    return _currentSession!;
+  }
+
+  /// Record a data point during an active session
+  /// Called on each AnglesReceived event
+  void recordDataPoint(SessionDataPoint dataPoint) {
+    if (_currentSession == null) {
+      print('⚠️ No active session to record data point');
+      return;
+    }
+    _currentSession!.dataPoints.add(dataPoint);
+  }
+
+  /// Finalize the current session (user pressed Stop or Back)
+  /// Sets endTime and persists to storage
+  Future<ActivityHistoryItem?> finalizeSession() async {
+    if (_currentSession == null) {
+      print('⚠️ No active session to finalize');
+      return null;
+    }
+
+    final finalized = _currentSession!.finalize();
+    _currentSession = null;
+
+    print(
+      '🔴 Session finalized: ${finalized.readingsCount} readings, duration: ${finalized.formattedDuration}',
+    );
+
+    // Only save if we have at least one data point
+    if (finalized.readingsCount > 0) {
+      await _saveSessionToHistory(finalized);
+      return finalized;
+    } else {
+      print('⚠️ Session had no data points, not saving');
+      return null;
+    }
+  }
+
+  /// Save a finalized session to history (local storage)
+  Future<void> _saveSessionToHistory(ActivityHistoryItem session) async {
+    final localHistory = await _getFromLocalStorage();
+    localHistory.insert(0, session);
+    await _saveToLocalStorage(localHistory.take(_maxHistoryItems).toList());
+  }
+
+  // ============ HISTORY RETRIEVAL ============
+
   /// Get all activity history items, sorted by most recent first
-  /// Uses local storage only when userId is set (backend is not user-aware)
   Future<List<ActivityHistoryItem>> getHistory() async {
     // Backend is NOT user-scoped, so skip it when we have a userId
-    // to ensure each user only sees their own history
     if (_userId != null && _userId!.isNotEmpty) {
       return _getFromLocalStorage();
     }
@@ -76,7 +145,6 @@ class ActivityHistoryService {
         }
       } catch (e) {
         _backendAvailable = false;
-        // ignore: avoid_print
         print('Backend unavailable, using local storage: $e');
       }
     }
@@ -84,8 +152,7 @@ class ActivityHistoryService {
     return _getFromLocalStorage();
   }
 
-  /// Add a new activity to history
-  /// Uses local-only when userId is set (backend is not user-aware)
+  /// Add a new activity to history (legacy method, still used for non-session creation)
   Future<ActivityHistoryItem?> addActivity(ActionType actionType) async {
     ActivityHistoryItem? newItem;
 
@@ -113,7 +180,6 @@ class ActivityHistoryService {
         }
       } catch (e) {
         _backendAvailable = false;
-        // ignore: avoid_print
         print('Backend unavailable for create, using local storage: $e');
       }
     }
@@ -138,7 +204,6 @@ class ActivityHistoryService {
   }
 
   /// Add activity from ActionType (convenience method)
-  /// Delegates to main addActivity method
   Future<ActivityHistoryItem> addActivityFromAction(ActionType action) async {
     final item = await addActivity(action);
     return item ?? ActivityHistoryItem.fromAction(action);
@@ -192,7 +257,7 @@ class ActivityHistoryService {
   /// Check if backend is currently available
   bool get isBackendAvailable => _backendAvailable;
 
-  /// Reset backend availability flag (e.g., after network reconnection)
+  /// Reset backend availability flag
   void resetBackendAvailability() {
     _backendAvailable = true;
   }

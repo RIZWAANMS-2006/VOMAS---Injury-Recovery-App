@@ -1,5 +1,5 @@
 // lib/presentation/widgets/activity_history_card.dart
-// Card widget for displaying activity history items
+// Card widget for displaying activity history items with session data
 
 import 'package:flutter/material.dart';
 import 'package:VOMAS/data/models/action_type.dart';
@@ -92,7 +92,7 @@ class ActivityHistoryCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
-                    // Measurements - use Wrap to avoid overflow
+                    // Measurements tags
                     Wrap(
                       spacing: 6,
                       runSpacing: 4,
@@ -117,6 +117,45 @@ class ActivityHistoryCard extends StatelessWidget {
                         );
                       }).toList(),
                     ),
+                    // Session info (duration + readings)
+                    if (item.readingsCount > 0) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.timer_outlined,
+                            size: 12,
+                            color: theme.textTheme.bodySmall?.color
+                                ?.withOpacity(0.6),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            item.formattedDuration,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: 11,
+                              color: theme.textTheme.bodySmall?.color
+                                  ?.withOpacity(0.6),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Icon(
+                            Icons.show_chart_rounded,
+                            size: 12,
+                            color: theme.textTheme.bodySmall?.color
+                                ?.withOpacity(0.6),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${item.readingsCount} readings',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: 11,
+                              color: theme.textTheme.bodySmall?.color
+                                  ?.withOpacity(0.6),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -188,7 +227,7 @@ class EmptyHistoryWidget extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Select an action below to get started',
+              'Select an action and press Connect to start recording',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.textTheme.bodyMedium?.color?.withOpacity(0.6),
               ),
