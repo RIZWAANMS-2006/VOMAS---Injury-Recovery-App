@@ -123,7 +123,7 @@ describe('ActivitiesController', () => {
 
             expect(result.data?.['Horizontal Abduction / Adduction']).toEqual({
                 shoulder: 'Yaw',
-                elbow: 'Roll',
+                elbow: 'Yaw',
                 wrist: 'Pitch',
             });
         });

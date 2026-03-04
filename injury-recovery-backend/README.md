@@ -89,7 +89,7 @@ The following actions are supported:
 | Flexion / Extension                | Roll     | Roll  | Pitch |
 | Abduction                          | Roll     | Roll  | Pitch |
 | Internal / External Rotation       | Pitch    | Roll  | Pitch |
-| Horizontal Abduction / Adduction   | Yaw      | Roll  | Pitch |
+| Horizontal Abduction / Adduction   | Yaw      | Yaw   | Pitch |
 | Forearm Pronation / Supination     | Roll     | Roll  | Roll  |
 | Radial / Ulnar Deviation           | Roll     | Roll  | Yaw   |
 
@@ -176,7 +176,7 @@ curl https://vomas-injury-recovery-app.onrender.com/api/actions
     "Flexion / Extension": { "shoulder": "Roll", "elbow": "Roll", "wrist": "Pitch" },
     "Abduction": { "shoulder": "Roll", "elbow": "Roll", "wrist": "Pitch" },
     "Internal / External Rotation": { "shoulder": "Pitch", "elbow": "Roll", "wrist": "Pitch" },
-    "Horizontal Abduction / Adduction": { "shoulder": "Yaw", "elbow": "Roll", "wrist": "Pitch" },
+    "Horizontal Abduction / Adduction": { "shoulder": "Yaw", "elbow": "Yaw", "wrist": "Pitch" },
     "Forearm Pronation / Supination": { "shoulder": "Roll", "elbow": "Roll", "wrist": "Roll" },
     "Radial / Ulnar Deviation": { "shoulder": "Roll", "elbow": "Roll", "wrist": "Yaw" }
   }

@@ -99,7 +99,7 @@ lib/
 | Flexion / Extension | Roll | Roll | Pitch |
 | Abduction | Roll | Roll | Pitch |
 | Internal / External Rotation | Pitch | Roll | Pitch |
-| Horizontal Abduction / Adduction | Yaw | Roll | Pitch |
+| Horizontal Abduction / Adduction | Yaw | Yaw | Pitch |
 | Forearm Pronation / Supination | Roll | Roll | Roll |
 | Radial / Ulnar Deviation | Roll | Roll | Yaw |
 

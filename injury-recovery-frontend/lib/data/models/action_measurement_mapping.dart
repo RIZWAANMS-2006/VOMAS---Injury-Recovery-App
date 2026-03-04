@@ -74,7 +74,7 @@ const Map<ActionType, ActionMeasurement> actionMeasurementMapping = {
   // Horizontal Abduction / Adduction
   ActionType.horizontalAbductionAdduction: ActionMeasurement(
     shoulder: MeasurementType.yaw,
-    elbow: MeasurementType.roll,
+    elbow: MeasurementType.yaw,
     wrist: MeasurementType.pitch,
   ),
 
