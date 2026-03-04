@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: vomas-backend
+    runtime: node
+    rootDir: injury-recovery-backend
+    buildCommand: pnpm install && pnpm run build
+    startCommand: pnpm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
