@@ -51,7 +51,7 @@ export const ACTION_MEASUREMENT_MAPPING: Record<ActionName, JointMeasurements> =
     },
     'Horizontal Abduction / Adduction': {
         shoulder: 'yaw',
-        elbow: 'roll',
+        elbow: 'yaw',
         wrist: 'pitch',
     },
     'Forearm Pronation / Supination': {
