@@ -2,7 +2,6 @@
 // Card widget for displaying activity history items with session data
 
 import 'package:flutter/material.dart';
-import 'package:VOMAS/data/models/action_type.dart';
 import 'package:VOMAS/data/models/activity_history_item.dart';
 
 /// A card displaying a single activity history entry
@@ -22,7 +21,7 @@ class ActivityHistoryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
-    final gradientColors = item.actionType.gradientColors;
+    final gradientColors = const [Color(0xFF4A90E2), Color(0xFF357ABD)];
 
     return Dismissible(
       key: Key(item.id),
@@ -70,8 +69,8 @@ class ActivityHistoryCard extends StatelessWidget {
                   ),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  item.actionType.icon,
+                child: const Icon(
+                  Icons.fitness_center_rounded,
                   color: Colors.white,
                   size: 24,
                 ),
@@ -84,7 +83,7 @@ class ActivityHistoryCard extends StatelessWidget {
                   children: [
                     // Action name
                     Text(
-                      item.actionType.displayName,
+                      item.name,
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -96,7 +95,7 @@ class ActivityHistoryCard extends StatelessWidget {
                     Wrap(
                       spacing: 6,
                       runSpacing: 4,
-                      children: item.measurements.entries.map((entry) {
+                      children: item.dataPoints.keys.map((actionName) {
                         return Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -107,7 +106,7 @@ class ActivityHistoryCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            '${entry.key}: ${entry.value}',
+                            actionName,
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w500,

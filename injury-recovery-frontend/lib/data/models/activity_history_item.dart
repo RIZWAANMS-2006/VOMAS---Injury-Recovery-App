@@ -3,43 +3,72 @@
 
 import 'dart:convert';
 
-import 'action_type.dart';
-import 'action_measurement_mapping.dart';
+/// Joint data with angle and speed
+class JointData {
+  final double angle;
+  final double speed;
+
+  const JointData({required this.angle, required this.speed});
+
+  factory JointData.fromJson(Map<String, dynamic> json) {
+    return JointData(
+      angle: (json['angle'] as num).toDouble(),
+      speed: (json['speed'] as num).toDouble(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'angle': angle,
+      'speed': speed,
+    };
+  }
+}
 
 /// A single data point recorded during a session
 class SessionDataPoint {
-  /// Angle values for each joint
-  final double shoulderAngle;
-  final double elbowAngle;
-  final double wristAngle;
-
-  /// Speed values for each joint
-  final double shoulderSpeed;
-  final double elbowSpeed;
-  final double wristSpeed;
-
-  /// When this data point was recorded
+  final JointData shoulder;
+  final JointData elbow;
+  final JointData wrist;
   final DateTime recordedAt;
 
   const SessionDataPoint({
-    required this.shoulderAngle,
-    required this.shoulderSpeed,
-    required this.elbowAngle,
-    required this.elbowSpeed,
-    required this.wristAngle,
-    required this.wristSpeed,
+    required this.shoulder,
+    required this.elbow,
+    required this.wrist,
     required this.recordedAt,
   });
 
-  /// Create from JSON
+  /// Create from JSON (supports legacy flat fields)
   factory SessionDataPoint.fromJson(Map<String, dynamic> json) {
+    if (json['shoulder'] is Map && json['elbow'] is Map && json['wrist'] is Map) {
+      return SessionDataPoint(
+        shoulder: JointData.fromJson(
+          Map<String, dynamic>.from(json['shoulder'] as Map),
+        ),
+        elbow: JointData.fromJson(
+          Map<String, dynamic>.from(json['elbow'] as Map),
+        ),
+        wrist: JointData.fromJson(
+          Map<String, dynamic>.from(json['wrist'] as Map),
+        ),
+        recordedAt: DateTime.parse(json['recordedAt'] as String),
+      );
+    }
+
     return SessionDataPoint(
-      shoulderAngle: (json['shoulderAngle'] as num).toDouble(),
-      shoulderSpeed: (json['shoulderSpeed'] as num).toDouble(),
-      elbowAngle: (json['elbowAngle'] as num).toDouble(),
-      elbowSpeed: (json['elbowSpeed'] as num).toDouble(),
-      wristAngle: (json['wristAngle'] as num).toDouble(),
-      wristSpeed: (json['wristSpeed'] as num).toDouble(),
+      shoulder: JointData(
+        angle: (json['shoulderAngle'] as num).toDouble(),
+        speed: (json['shoulderSpeed'] as num).toDouble(),
+      ),
+      elbow: JointData(
+        angle: (json['elbowAngle'] as num).toDouble(),
+        speed: (json['elbowSpeed'] as num).toDouble(),
+      ),
+      wrist: JointData(
+        angle: (json['wristAngle'] as num).toDouble(),
+        speed: (json['wristSpeed'] as num).toDouble(),
+      ),
       recordedAt: DateTime.parse(json['recordedAt'] as String),
     );
   }
@@ -47,19 +76,16 @@ class SessionDataPoint {
   /// Convert to JSON
   Map<String, dynamic> toJson() {
     return {
-      'shoulderAngle': shoulderAngle,
-      'shoulderSpeed': shoulderSpeed,
-      'elbowAngle': elbowAngle,
-      'elbowSpeed': elbowSpeed,
-      'wristAngle': wristAngle,
-      'wristSpeed': wristSpeed,
+      'shoulder': shoulder.toJson(),
+      'elbow': elbow.toJson(),
+      'wrist': wrist.toJson(),
       'recordedAt': recordedAt.toIso8601String(),
     };
   }
 
   @override
   String toString() {
-    return 'SessionDataPoint(sh:$shoulderAngle/$shoulderSpeed, el:$elbowAngle/$elbowSpeed, wr:$wristAngle/$wristSpeed)';
+    return 'SessionDataPoint(sh:${shoulder.angle}/${shoulder.speed}, el:${elbow.angle}/${elbow.speed}, wr:${wrist.angle}/${wrist.speed})';
   }
 }
 
@@ -68,14 +94,8 @@ class ActivityHistoryItem {
   /// Unique identifier for this history item
   final String id;
 
-  /// The action type that was selected (for UI/local use)
-  final ActionType actionType;
-
-  /// The action name string (for API compatibility)
-  final String actionName;
-
-  /// The measurement configuration for this action
-  final Map<String, String> measurements;
+  /// User-friendly session name
+  final String name;
 
   /// When the session started (Connect pressed)
   final DateTime timestamp;
@@ -83,19 +103,16 @@ class ActivityHistoryItem {
   /// When the session ended (Stop/Back pressed), null if still active
   final DateTime? endTime;
 
-  /// All data points recorded during this session
-  final List<SessionDataPoint> dataPoints;
+  /// All data points recorded during this session, grouped by action name
+  final Map<String, List<SessionDataPoint>> dataPoints;
 
   ActivityHistoryItem({
     required this.id,
-    required this.actionType,
-    String? actionName,
-    required this.measurements,
+    required this.name,
     required this.timestamp,
     this.endTime,
-    List<SessionDataPoint>? dataPoints,
-  }) : actionName = actionName ?? actionType.displayName,
-       dataPoints = dataPoints ?? [];
+    Map<String, List<SessionDataPoint>>? dataPoints,
+  }) : dataPoints = dataPoints ?? {};
 
   /// Session duration (null if session not finalized)
   Duration? get duration {
@@ -116,36 +133,29 @@ class ActivityHistoryItem {
   }
 
   /// Number of data points recorded
-  int get readingsCount => dataPoints.length;
+  int get readingsCount => dataPoints.values.fold(
+    0,
+    (total, list) => total + list.length,
+  );
 
   /// Whether this session has been finalized
   bool get isFinalized => endTime != null;
 
-  /// Factory constructor to create from ActionType (session start)
-  factory ActivityHistoryItem.startSession(ActionType action) {
-    final measurement = getMeasurementForAction(action);
+  /// Factory constructor to create a new session
+  factory ActivityHistoryItem.startSession({required String name}) {
     return ActivityHistoryItem(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      actionType: action,
-      actionName: action.displayName,
-      measurements: measurement.toDisplayMap(),
+      name: name,
       timestamp: DateTime.now(),
-      dataPoints: [],
+      dataPoints: {},
     );
-  }
-
-  /// Legacy factory for backward compatibility
-  factory ActivityHistoryItem.fromAction(ActionType action) {
-    return ActivityHistoryItem.startSession(action);
   }
 
   /// Creates a finalized copy with endTime set
   ActivityHistoryItem finalize() {
     return ActivityHistoryItem(
       id: id,
-      actionType: actionType,
-      actionName: actionName,
-      measurements: measurements,
+      name: name,
       timestamp: timestamp,
       endTime: DateTime.now(),
       dataPoints: dataPoints,
@@ -156,54 +166,31 @@ class ActivityHistoryItem {
   factory ActivityHistoryItem.fromJson(Map<String, dynamic> json) {
     return ActivityHistoryItem(
       id: json['id'] as String,
-      actionType: ActionTypeExtension.fromStorageKey(
-        json['actionType'] as String,
-      ),
-      actionName:
+      name:
+          json['name'] as String? ??
           json['actionName'] as String? ??
-          ActionTypeExtension.fromStorageKey(
-            json['actionType'] as String,
-          ).displayName,
-      measurements: Map<String, String>.from(json['measurements'] as Map),
+          (json['actionType'] as String? ?? 'Session'),
       timestamp: DateTime.parse(json['timestamp'] as String),
       endTime: json['endTime'] != null
           ? DateTime.parse(json['endTime'] as String)
           : null,
-      dataPoints: json['dataPoints'] != null
-          ? (json['dataPoints'] as List)
-                .map(
-                  (e) => SessionDataPoint.fromJson(e as Map<String, dynamic>),
-                )
-                .toList()
-          : [],
+      dataPoints: _parseDataPoints(json['dataPoints'], json),
     );
   }
 
   /// Creates an ActivityHistoryItem from backend API JSON response
-  /// Backend uses actionName string, not actionType enum
   factory ActivityHistoryItem.fromApiJson(Map<String, dynamic> json) {
-    final actionName = json['actionName'] as String;
-    final measurements = json['measurements'] as Map<String, dynamic>;
-
-    // Convert actionName to ActionType
-    final actionType = ActionTypeExtension.fromDisplayName(actionName);
-
     return ActivityHistoryItem(
       id: json['id'] as String,
-      actionType: actionType,
-      actionName: actionName,
-      measurements: Map<String, String>.from(measurements),
+      name:
+          json['name'] as String? ??
+          json['actionName'] as String? ??
+          'Session',
       timestamp: DateTime.parse(json['timestamp'] as String),
       endTime: json['endTime'] != null
           ? DateTime.parse(json['endTime'] as String)
           : null,
-      dataPoints: json['dataPoints'] != null
-          ? (json['dataPoints'] as List)
-                .map(
-                  (e) => SessionDataPoint.fromJson(e as Map<String, dynamic>),
-                )
-                .toList()
-          : [],
+      dataPoints: _parseDataPoints(json['dataPoints'], json),
     );
   }
 
@@ -211,12 +198,12 @@ class ActivityHistoryItem {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
-      'actionType': actionType.storageKey,
-      'actionName': actionName,
-      'measurements': measurements,
+      'name': name,
       'timestamp': timestamp.toIso8601String(),
       'endTime': endTime?.toIso8601String(),
-      'dataPoints': dataPoints.map((e) => e.toJson()).toList(),
+      'dataPoints': dataPoints.map(
+        (key, list) => MapEntry(key, list.map((e) => e.toJson()).toList()),
+      ),
     };
   }
 
@@ -253,8 +240,39 @@ class ActivityHistoryItem {
 
   @override
   String toString() {
-    return 'ActivityHistoryItem(action: ${actionType.displayName}, time: $formattedDateTime, readings: $readingsCount, duration: $formattedDuration)';
+    return 'ActivityHistoryItem(name: $name, time: $formattedDateTime, readings: $readingsCount, duration: $formattedDuration)';
   }
+}
+
+Map<String, List<SessionDataPoint>> _parseDataPoints(
+  dynamic rawDataPoints,
+  Map<String, dynamic> json,
+) {
+  if (rawDataPoints is Map) {
+    final map = Map<String, dynamic>.from(rawDataPoints as Map);
+    return map.map(
+      (key, value) => MapEntry(
+        key,
+        (value as List)
+            .map((e) => SessionDataPoint.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      ),
+    );
+  }
+
+  if (rawDataPoints is List) {
+    final name =
+        json['name'] as String? ??
+        json['actionName'] as String? ??
+        (json['actionType'] as String? ?? 'Session');
+    return {
+      name: rawDataPoints
+          .map((e) => SessionDataPoint.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    };
+  }
+
+  return {};
 }
 
 /// Helper to encode list of ActivityHistoryItem to JSON string

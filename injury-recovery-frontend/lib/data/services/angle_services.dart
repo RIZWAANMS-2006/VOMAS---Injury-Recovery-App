@@ -7,21 +7,30 @@ import '../models/angles.dart';
 
 class AngleService {
   io.Socket? _socket;
-  StreamController<Angles>? _angleController;
+  StreamController<Map<String, Angles>>? _angleController;
   bool _isConnected = false;
-  Angles? _latestAngles; // Cache for synchronous access
+  Map<String, Angles>? _latestAngles; // Cache for synchronous access
   bool _isDisposed = false;
 
+  static const List<String> _actionNames = [
+    'Flexion / Extension',
+    'Abduction',
+    'Internal / External Rotation',
+    'Horizontal Abduction / Adduction',
+    'Forearm Pronation / Supination',
+    'Radial / Ulnar Deviation',
+  ];
+
   // Ensure StreamController is initialized and open
-  StreamController<Angles> _getAngleController() {
+  StreamController<Map<String, Angles>> _getAngleController() {
     if (_angleController == null || _angleController!.isClosed) {
-      _angleController = StreamController<Angles>.broadcast();
+      _angleController = StreamController<Map<String, Angles>>.broadcast();
     }
     return _angleController!;
   }
 
   // Public stream for UI to listen
-  Stream<Angles> get angleStream => _getAngleController().stream;
+  Stream<Map<String, Angles>> get angleStream => _getAngleController().stream;
 
   // Singleton pattern
   static final AngleService _instance = AngleService._internal();
@@ -73,6 +82,8 @@ class AngleService {
       }
     });
 
+    _setupListeners();
+
     // Wait for connection to be established
     return completer.future.timeout(
       const Duration(seconds: 5),
@@ -105,9 +116,21 @@ class AngleService {
           jsonMap = Map<String, dynamic>.from(data as Map);
         }
 
-        final angles = Angles.fromJson(jsonMap);
-        _getAngleController().add(angles);
-        _latestAngles = angles;
+        final allAngles = <String, Angles>{};
+        final isMultiAction = _actionNames.any(jsonMap.containsKey);
+        if (isMultiAction) {
+          for (final entry in jsonMap.entries) {
+            if (entry.value is Map) {
+              allAngles[entry.key] = Angles.fromJson(
+                Map<String, dynamic>.from(entry.value as Map),
+              );
+            }
+          }
+        } else {
+          allAngles['Unknown Action'] = Angles.fromJson(jsonMap);
+        }
+        _getAngleController().add(allAngles);
+        _latestAngles = allAngles;
         print('✅ Parsed & Streamed Angles');
       } catch (e) {
         print('❌ Parse error: $e');
@@ -135,10 +158,10 @@ class AngleService {
   bool get isConnected => _isConnected;
 
   /// Get latest angles synchronously (cached, null if none received)
-  Angles? get latestAngles => _latestAngles;
+  Map<String, Angles>? get latestAngles => _latestAngles;
 
   /// Check if any angles have been received
-  bool get hasAngles => _latestAngles != null;
+  bool get hasAngles => _latestAngles != null && _latestAngles!.isNotEmpty;
 
   /// Select action - notify backend which measurements to filter and send
   void selectAction(String actionName) {

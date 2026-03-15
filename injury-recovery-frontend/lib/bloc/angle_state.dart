@@ -7,7 +7,7 @@ class AngleState {
   final ConnectionStatus connectionStatus;
   final bool isConnecting;
   final String? connectionError;
-  final Angles? latestAngles;
+  final Map<String, Angles>? latestAngles;
   final bool isCorrect;
   final VomasTask? selectedTask;
   final DateTime? timestamp;
@@ -32,7 +32,7 @@ class AngleState {
     ConnectionStatus? connectionStatus,
     bool? isConnecting,
     String? connectionError,
-    Angles? latestAngles,
+    Map<String, Angles>? latestAngles,
     bool? isCorrect,
     VomasTask? selectedTask,
     DateTime? timestamp,
@@ -54,7 +54,11 @@ class AngleState {
     );
   }
 
-  bool get hasAngles => latestAngles != null;
+  bool get hasAngles => latestAngles != null && latestAngles!.isNotEmpty;
+
+  Angles? getAnglesForAction(String actionName) {
+    return latestAngles?[actionName];
+  }
   bool get isReady =>
       connectionStatus == ConnectionStatus.connected && hasAngles;
 }

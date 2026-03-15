@@ -70,28 +70,34 @@ class ActivityHistoryService {
 
   /// Start a new recording session when user presses Connect
   /// Creates an ActivityHistoryItem with startTime = now, empty dataPoints
-  ActivityHistoryItem startSession(ActionType actionType) {
+  ActivityHistoryItem startSession(
+    ActionType actionType, {
+    String? customActionName,
+  }) {
     // If there's an active session that wasn't finalized, finalize it first
     if (_currentSession != null) {
       print('⚠️ Previous session was not finalized, auto-finalizing');
       finalizeSession();
     }
 
-    _currentSession = ActivityHistoryItem.startSession(actionType);
+    _currentSession = ActivityHistoryItem.startSession(
+      name: customActionName ?? actionType.displayName,
+    );
     print(
-      '🟢 Session started: ${actionType.displayName} at ${_currentSession!.formattedTime}',
+      '🟢 Session started: ${_currentSession!.name} at ${_currentSession!.formattedTime}',
     );
     return _currentSession!;
   }
 
   /// Record a data point during an active session
   /// Called on each AnglesReceived event
-  void recordDataPoint(SessionDataPoint dataPoint) {
+  void recordDataPoint(String actionName, SessionDataPoint dataPoint) {
     if (_currentSession == null) {
       print('⚠️ No active session to record data point');
       return;
     }
-    _currentSession!.dataPoints.add(dataPoint);
+    _currentSession!.dataPoints.putIfAbsent(actionName, () => []);
+    _currentSession!.dataPoints[actionName]!.add(dataPoint);
   }
 
   /// Finalize the current session (user pressed Stop or Back)
@@ -158,7 +164,9 @@ class ActivityHistoryService {
 
     // When user-scoped, skip backend entirely — save locally only
     if (_userId != null && _userId!.isNotEmpty) {
-      newItem = ActivityHistoryItem.fromAction(actionType);
+      newItem = ActivityHistoryItem.startSession(
+        name: actionType.displayName,
+      ).finalize();
       final localHistory = await _getFromLocalStorage();
       localHistory.insert(0, newItem);
       await _saveToLocalStorage(localHistory.take(_maxHistoryItems).toList());
@@ -185,7 +193,9 @@ class ActivityHistoryService {
     }
 
     // Fallback to local creation
-    newItem = ActivityHistoryItem.fromAction(actionType);
+    newItem = ActivityHistoryItem.startSession(
+      name: actionType.displayName,
+    ).finalize();
     final localHistory = await _getFromLocalStorage();
     localHistory.insert(0, newItem);
     await _saveToLocalStorage(localHistory.take(_maxHistoryItems).toList());
@@ -206,7 +216,8 @@ class ActivityHistoryService {
   /// Add activity from ActionType (convenience method)
   Future<ActivityHistoryItem> addActivityFromAction(ActionType action) async {
     final item = await addActivity(action);
-    return item ?? ActivityHistoryItem.fromAction(action);
+    return item ??
+      ActivityHistoryItem.startSession(name: action.displayName).finalize();
   }
 
   /// Remove a specific activity by ID
@@ -235,7 +246,11 @@ class ActivityHistoryService {
     ActionType actionType,
   ) async {
     final items = await getHistory();
-    return items.where((item) => item.actionType == actionType).toList();
+    return items
+        .where(
+          (item) => item.dataPoints.containsKey(actionType.displayName),
+        )
+        .toList();
   }
 
   /// Get history for today only

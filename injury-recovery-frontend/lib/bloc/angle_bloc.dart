@@ -11,7 +11,7 @@ import 'package:VOMAS/data/services/activity_history_service.dart';
 class AngleBloc extends Bloc<AngleEvent, AngleState> {
   final AngleService _angleService;
   final ActivityHistoryService _historyService;
-  StreamSubscription<Angles>? _angleSubscription;
+  StreamSubscription<Map<String, Angles>>? _angleSubscription;
 
   AngleBloc(this._angleService, this._historyService)
     : super(const AngleState()) {
@@ -65,7 +65,7 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
 
       // Start a new session for history recording
       if (event.actionType != null) {
-        _historyService.startSession(event.actionType!);
+        _historyService.startSession(event.actionType!, customActionName: event.customHistoryName);
       }
 
       emit(
@@ -102,7 +102,7 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
       state.copyWith(
         connectionStatus: ConnectionStatus.disconnected,
         connectionError: null,
-        latestAngles: null,
+        // We keep latestAngles so the UI doesn't reset to "--"
         sessionActive: false,
         sessionReadings: 0,
       ),
@@ -110,30 +110,40 @@ class AngleBloc extends Bloc<AngleEvent, AngleState> {
   }
 
   void _onAnglesReceived(AnglesReceived event, Emitter<AngleState> emit) {
-    print(
-      '🧩 BLOC: AnglesReceived event! Shoulder: ${event.angles.shoulder.angle}',
-    );
-    final currentAngles = event.angles;
-    final isCorrect = _validateAngles(currentAngles);
+    final allAngles = event.angles;
+    if (allAngles.isEmpty) return;
 
-    // Record data point to session
+    // Record data point to session for each action
     if (_historyService.hasActiveSession) {
-      _historyService.recordDataPoint(
-        SessionDataPoint(
-          shoulderAngle: currentAngles.shoulder.angle,
-          shoulderSpeed: currentAngles.shoulder.speed,
-          elbowAngle: currentAngles.elbow.angle,
-          elbowSpeed: currentAngles.elbow.speed,
-          wristAngle: currentAngles.wrist.angle,
-          wristSpeed: currentAngles.wrist.speed,
-          recordedAt: DateTime.now(),
-        ),
-      );
+      allAngles.forEach((actionName, currentAngles) {
+        _historyService.recordDataPoint(
+          actionName,
+          SessionDataPoint(
+            shoulder: JointData(
+              angle: currentAngles.shoulder.angle,
+              speed: currentAngles.shoulder.speed,
+            ),
+            elbow: JointData(
+              angle: currentAngles.elbow.angle,
+              speed: currentAngles.elbow.speed,
+            ),
+            wrist: JointData(
+              angle: currentAngles.wrist.angle,
+              speed: currentAngles.wrist.speed,
+            ),
+            recordedAt: DateTime.now(),
+          ),
+        );
+      });
     }
+
+    final primaryAngles =
+        allAngles[state.selectedAction] ?? allAngles.values.first;
+    final isCorrect = _validateAngles(primaryAngles);
 
     emit(
       state.copyWith(
-        latestAngles: currentAngles,
+        latestAngles: allAngles,
         isCorrect: isCorrect,
         timestamp: DateTime.now(),
         sessionReadings: _historyService.currentSessionReadings,

@@ -83,9 +83,10 @@ class VomasTestScreen extends StatelessWidget {
         ),
         body: BlocBuilder<AngleBloc, AngleState>(
           builder: (context, state) {
-            if (state.latestAngles != null) {
+            final latestAngles = state.latestAngles?.values.first;
+            if (latestAngles != null) {
               print(
-                '🎨 UI: Rebuilding with new angles. Shoulder: ${state.latestAngles!.shoulder.angle}',
+                '🎨 UI: Rebuilding with new angles. Shoulder: ${latestAngles.shoulder.angle}',
               );
             }
             return Column(
@@ -97,10 +98,13 @@ class VomasTestScreen extends StatelessWidget {
                 _StatusIndicator(state: state),
 
                 // Current Angles
-                if (state.latestAngles != null) _CurrentAngles(state: state),
+                if (latestAngles != null)
+                  _CurrentAngles(state: state, latestAngles: latestAngles),
 
                 // Real-time Graph
-                Expanded(child: _AngleGraph(state: state)),
+                Expanded(
+                  child: _AngleGraph(state: state, latestAngles: latestAngles),
+                ),
               ],
             );
           },
@@ -248,8 +252,9 @@ class _StatusIndicator extends StatelessWidget {
 
 class _CurrentAngles extends StatelessWidget {
   final AngleState state;
+  final Angles latestAngles;
 
-  const _CurrentAngles({required this.state});
+  const _CurrentAngles({required this.state, required this.latestAngles});
 
   @override
   Widget build(BuildContext context) {
@@ -269,17 +274,17 @@ class _CurrentAngles extends StatelessWidget {
             children: [
               _AngleChip(
                 'Shoulder',
-                state.latestAngles!.shoulder.angle,
+                latestAngles.shoulder.angle,
                 state.selectedTask?.shoulder,
               ),
               _AngleChip(
                 'Elbow',
-                state.latestAngles!.elbow.angle,
+                latestAngles.elbow.angle,
                 state.selectedTask?.elbow,
               ),
               _AngleChip(
                 'Wrist',
-                state.latestAngles!.wrist.angle,
+                latestAngles.wrist.angle,
                 state.selectedTask?.wrist,
               ),
             ],
@@ -292,8 +297,9 @@ class _CurrentAngles extends StatelessWidget {
 
 class _AngleGraph extends StatelessWidget {
   final AngleState state;
+  final Angles? latestAngles;
 
-  const _AngleGraph({required this.state});
+  const _AngleGraph({required this.state, required this.latestAngles});
 
   @override
   Widget build(BuildContext context) {
@@ -316,7 +322,7 @@ class _AngleGraph extends StatelessWidget {
           SizedBox(height: 16),
           Expanded(
             child: CustomPaint(
-              painter: AngleGraphPainter(state.latestAngles),
+              painter: AngleGraphPainter(latestAngles),
               size: Size.infinite,
             ),
           ),

@@ -5,8 +5,7 @@
 class ApiConfig {
   /// Base URL for the backend API
   /// Change this when deploying to production or for different environments
-  static const String baseUrl =
-      'https://vomas-injury-recovery-app.onrender.com';
+  static const String baseUrl = 'https://mrtzzhhh-3000.inc1.devtunnels.ms';
 
   /// API timeout in seconds
   static const int timeoutSeconds = 30;

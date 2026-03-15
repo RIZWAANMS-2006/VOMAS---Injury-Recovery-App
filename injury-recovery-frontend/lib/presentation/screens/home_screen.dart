@@ -6,10 +6,15 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:VOMAS/bloc/home/home_bloc.dart';
 import 'package:VOMAS/bloc/home/home_event.dart';
 import 'package:VOMAS/bloc/home/home_state.dart';
+import 'package:VOMAS/bloc/angle_bloc.dart';
+import 'package:VOMAS/bloc/angle_event.dart';
+import 'package:VOMAS/bloc/angle_state.dart';
+import 'package:VOMAS/data/models/action_type.dart';
 import 'package:VOMAS/data/services/excel_export_service.dart';
-import 'package:VOMAS/presentation/screens/measurement_screen.dart';
-import 'package:VOMAS/presentation/widgets/action_card.dart';
+import 'package:VOMAS/data/services/angle_services.dart';
+import 'package:VOMAS/data/services/api_config.dart';
 import 'package:VOMAS/presentation/widgets/activity_history_card.dart';
+import 'package:VOMAS/presentation/widgets/single_measurement_card.dart';
 
 /// The main home screen of the app
 class HomeScreen extends StatelessWidget {
@@ -20,79 +25,59 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) =>
-          HomeBloc(userId: userId)..add(const LoadHistoryRequested()),
-      child: _HomeScreenContent(userName: userName),
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider<HomeBloc>(
+          create: (_) =>
+              HomeBloc(userId: userId)..add(const LoadHistoryRequested()),
+        ),
+      ],
+      // We need to access HomeBloc's historyService for AngleBloc
+      child: Builder(
+        builder: (context) {
+          final homeBloc = context.read<HomeBloc>();
+          return BlocProvider<AngleBloc>(
+            create: (_) => AngleBloc(AngleService(), homeBloc.historyService),
+            child: _HomeScreenContent(userName: userName),
+          );
+        }
+      ),
     );
   }
 }
 
-class _HomeScreenContent extends StatelessWidget {
+class _HomeScreenContent extends StatefulWidget {
   final String userName;
 
   const _HomeScreenContent({required this.userName});
 
   @override
+  State<_HomeScreenContent> createState() => _HomeScreenContentState();
+}
+
+class _HomeScreenContentState extends State<_HomeScreenContent> {
+  // We'll keep track of a generic "Session" for recording since
+  // there's no specific action selected before connecting.
+  final ActionType _sessionActionType = ActionType.flexionExtension;
+
+  @override
   Widget build(BuildContext context) {
-    return BlocListener<HomeBloc, HomeState>(
-      listenWhen: (previous, current) =>
-          current.shouldNavigate && current.selectedAction != null,
-      listener: (context, state) {
-        if (state.shouldNavigate && state.selectedAction != null) {
-          final homeBloc = context.read<HomeBloc>();
-          Navigator.push(
-            context,
-            PageRouteBuilder(
-              pageBuilder: (context, animation, secondaryAnimation) {
-                return MeasurementScreen(
-                  actionType: state.selectedAction!,
-                  historyService: homeBloc.historyService,
-                );
-              },
-              transitionsBuilder:
-                  (context, animation, secondaryAnimation, child) {
-                    return FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(
-                        position:
-                            Tween<Offset>(
-                              begin: const Offset(0.1, 0),
-                              end: Offset.zero,
-                            ).animate(
-                              CurvedAnimation(
-                                parent: animation,
-                                curve: Curves.easeOutCubic,
-                              ),
-                            ),
-                        child: child,
-                      ),
-                    );
-                  },
-              transitionDuration: const Duration(milliseconds: 300),
-            ),
-          ).then((_) {
-            // Refresh history when returning
-            context.read<HomeBloc>().add(const RefreshHistoryRequested());
-          });
-        }
-      },
-      child: Scaffold(
-        body: SafeArea(
-          child: CustomScrollView(
-            slivers: [
-              // App Bar
-              _buildAppBar(context),
-              // Actions Section Header
-              _buildActionsSectionHeader(),
-              // Actions Grid
-              _buildActionsGrid(),
-              // Activity History Section (at bottom)
-              _buildHistorySection(),
-              // Bottom padding
-              const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
-            ],
-          ),
+    return Scaffold(
+      body: SafeArea(
+        child: CustomScrollView(
+          slivers: [
+            // App Bar
+            _buildAppBar(context),
+            
+            // Actions + Measurements List
+            _buildMeasurementsList(),
+
+            // Activity History Section (at bottom)
+            _buildHistorySection(),
+
+            // Bottom padding
+            const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
+          ],
         ),
       ),
     );
@@ -104,59 +89,113 @@ class _HomeScreenContent extends StatelessWidget {
     return SliverAppBar(
       floating: true,
       snap: true,
-      expandedHeight: 100,
+      expandedHeight: 80,
       backgroundColor: theme.scaffoldBackgroundColor,
-      leading: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          tooltip: 'Switch User',
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      flexibleSpace: FlexibleSpaceBar(
-        titlePadding: const EdgeInsets.only(left: 60, bottom: 16),
-        title: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'VOMAS',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-                fontSize: 24,
-              ),
+      title: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'VOMAS',
+            style: theme.textTheme.headlineMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              fontSize: 24,
             ),
-            Text(
-              userName,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: const Color(0xFF4A90E2),
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-              ),
+          ),
+          Text(
+            widget.userName,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: const Color(0xFF4A90E2),
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
       actions: [
+        BlocBuilder<AngleBloc, AngleState>(
+          builder: (context, state) {
+            final isConnected = state.connectionStatus == ConnectionStatus.connected;
+            final isConnecting = state.connectionStatus == ConnectionStatus.connecting;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isConnected)
+                  TextButton.icon(
+                    onPressed: () {
+                      context.read<AngleBloc>().add(CalibrateRequested());
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Calibration signal sent'),
+                          duration: Duration(seconds: 2),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.tune_rounded, size: 18),
+                    label: const Text('Calibrate'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF9C27B0),
+                    ),
+                  ),
+                const SizedBox(width: 4),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    if (isConnected) {
+                       context.read<AngleBloc>().add(DisconnectRequested());
+                       // Refresh history to show recent session
+                       context.read<HomeBloc>().add(const RefreshHistoryRequested());
+                    } else if (!isConnecting) {
+                       context.read<AngleBloc>().add(
+                         ConnectRequested(
+                           ApiConfig.baseUrl,
+                           actionName: 'All Measure',
+                           actionType: _sessionActionType,
+                           customHistoryName: 'all measurement',
+                         ),
+                       );
+                    }
+                  },
+                  icon: Icon(
+                    isConnected ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                    size: 18,
+                  ),
+                  label: Text(
+                    isConnected ? 'Stop' : isConnecting ? 'Wait...' : 'Connect',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isConnected
+                        ? Colors.red.shade400
+                        : const Color(0xFF4A90E2),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: const Size(0, 36),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+            );
+          },
+        ),
         BlocBuilder<HomeBloc, HomeState>(
           builder: (context, state) {
             return Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Export button
+                if (state.hasHistory)
+                  IconButton(
+                    icon: const Icon(Icons.history_rounded),
+                    tooltip: 'History',
+                    onPressed: () {
+                       // Optional: Scroll to bottom or show bottom sheet
+                       // Currently just an indicator 
+                    },
+                  ),
                 if (state.hasHistory)
                   IconButton(
                     icon: const Icon(Icons.file_download_outlined),
                     tooltip: 'Export to Excel',
                     onPressed: () => _exportHistory(context, state),
-                  ),
-                // Clear history button
-                if (state.hasHistory)
-                  IconButton(
-                    icon: const Icon(Icons.delete_sweep_rounded),
-                    tooltip: 'Clear History',
-                    onPressed: () => _showClearHistoryDialog(context),
                   ),
               ],
             );
@@ -164,6 +203,68 @@ class _HomeScreenContent extends StatelessWidget {
         ),
         const SizedBox(width: 8),
       ],
+    );
+  }
+
+  Widget _buildMeasurementsList() {
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            final actionType = ActionType.values[index];
+            final theme = Theme.of(context);
+            
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Action Header
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8, left: 4),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: actionType.gradientColors.first.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          actionType.icon,
+                          size: 16,
+                          color: actionType.gradientColors.first,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        actionType.displayName,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Single unified measurement card 
+                BlocBuilder<AngleBloc, AngleState>(
+                  builder: (context, state) {
+                    final isConnected = state.connectionStatus == ConnectionStatus.connected;
+                    final anglesForAction =
+                        state.getAnglesForAction(actionType.displayName);
+                    return SingleMeasurementCard(
+                      shoulder: anglesForAction?.shoulder,
+                      elbow: anglesForAction?.elbow,
+                      wrist: anglesForAction?.wrist,
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
+            );
+          },
+          childCount: ActionType.values.length,
+        ),
+      ),
     );
   }
 
@@ -269,57 +370,6 @@ class _HomeScreenContent extends StatelessWidget {
     );
   }
 
-  Widget _buildActionsSectionHeader() {
-    return SliverToBoxAdapter(
-      child: Builder(
-        builder: (context) {
-          final theme = Theme.of(context);
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF5A623).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.touch_app_rounded,
-                    color: Color(0xFFF5A623),
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'Select Action',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildActionsGrid() {
-    return SliverToBoxAdapter(
-      child: BlocBuilder<HomeBloc, HomeState>(
-        builder: (context, state) {
-          return ActionsGrid(
-            onActionSelected: (action) {
-              context.read<HomeBloc>().add(ActionSelected(action));
-            },
-            selectedAction: state.selectedAction,
-          );
-        },
-      ),
-    );
-  }
-
   void _exportHistory(BuildContext context, HomeState state) async {
     if (!state.hasHistory) return;
 
@@ -348,7 +398,7 @@ class _HomeScreenContent extends StatelessWidget {
       final exportService = ExcelExportService();
       final filePath = await exportService.exportHistory(
         state.history,
-        userName,
+        widget.userName,
       );
 
       if (!context.mounted) return;

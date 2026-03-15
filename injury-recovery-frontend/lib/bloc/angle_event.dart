@@ -8,13 +8,14 @@ class ConnectRequested implements AngleEvent {
   final String serverUrl;
   final String? actionName; // Action to register after connecting
   final ActionType? actionType; // ActionType for session tracking
-  ConnectRequested(this.serverUrl, {this.actionName, this.actionType});
+  final String? customHistoryName; // Custom name for the session history
+  ConnectRequested(this.serverUrl, {this.actionName, this.actionType, this.customHistoryName});
 }
 
 class DisconnectRequested implements AngleEvent {}
 
 class AnglesReceived implements AngleEvent {
-  final Angles angles;
+  final Map<String, Angles> angles;
   AnglesReceived(this.angles);
 }
 

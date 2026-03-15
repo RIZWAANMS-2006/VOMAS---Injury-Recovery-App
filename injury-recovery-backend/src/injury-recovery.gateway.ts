@@ -14,6 +14,7 @@ import {
 import {
   getMeasurementsForAction,
   MeasurementType,
+  VALID_ACTIONS,
 } from './config/action-mapping.config';
 import { VOMASService } from './injury-recovery.service';
 
@@ -117,13 +118,7 @@ export class VOMASGateway {
   private filterAnglesForAction(
     angles: AnglesDto,
     actionName: string,
-  ): FilteredAnglesOutput | null {
-    const mapping = getMeasurementsForAction(actionName);
-    if (!mapping) {
-      console.log(`Invalid action: ${actionName}`);
-      return null;
-    }
-
+  ): FilteredAnglesOutput | Record<string, FilteredAnglesOutput> | null {
     const getJointMeasurement = (
       joint: 'shoulder' | 'elbow' | 'wrist',
       type: MeasurementType,
@@ -136,6 +131,28 @@ export class VOMASGateway {
         type: type,
       };
     };
+
+    if (actionName === 'All Measure') {
+      const allActions: Record<string, FilteredAnglesOutput> = {};
+      for (const action of VALID_ACTIONS) {
+        const mapping = getMeasurementsForAction(action);
+        if (!mapping) {
+          continue;
+        }
+        allActions[action] = {
+          shoulder: getJointMeasurement('shoulder', mapping.shoulder),
+          elbow: getJointMeasurement('elbow', mapping.elbow),
+          wrist: getJointMeasurement('wrist', mapping.wrist),
+        };
+      }
+      return allActions;
+    }
+
+    const mapping = getMeasurementsForAction(actionName);
+    if (!mapping) {
+      console.log(`Invalid action: ${actionName}`);
+      return null;
+    }
 
     return {
       shoulder: getJointMeasurement('shoulder', mapping.shoulder),
