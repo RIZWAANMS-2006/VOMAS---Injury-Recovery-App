@@ -40,6 +40,7 @@ const ZERO_POSE: AnglesDto = {
 };
 
 let zeroModeUntil: number = 0; // Timestamp until which we send ZERO_POSE
+let logCounter = 0;
 
 // Helper to generate a dummy joint data
 function createdummyJoint(t: number, phase: number): JointData {
@@ -64,6 +65,16 @@ async function sendAngles() {
       elbow: createdummyJoint(t, 1),
       wrist: createdummyJoint(t, 2),
     };
+  }
+
+  logCounter += 1;
+  if (logCounter % 10 === 0) {
+    console.log(
+      `\n[${new Date().toISOString()}] Payload roll angles: shoulder=${angles.shoulder.roll.angle.toFixed(2)}, elbow=${angles.elbow.roll.angle.toFixed(2)}, wrist=${angles.wrist.roll.angle.toFixed(2)}`,
+    );
+    console.log(
+      `[${new Date().toISOString()}] Payload roll speeds: shoulder=${(angles.shoulder.roll.speed ?? 0).toFixed(2)}, elbow=${(angles.elbow.roll.speed ?? 0).toFixed(2)}, wrist=${(angles.wrist.roll.speed ?? 0).toFixed(2)}`,
+    );
   }
 
   try {
