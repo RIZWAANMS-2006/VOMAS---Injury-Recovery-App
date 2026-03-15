@@ -2,7 +2,7 @@
 // IoT Simulator for VOMAS
 // Run with: npx ts-node --moduleResolution node scripts/simulate_iot.ts
 
-const API_URL = 'https://mrtzzhhh-3000.inc1.devtunnels.ms';
+const API_URL = 'https://vomas-injury-recovery-app.onrender.com';
 
 interface MeasurementData {
   angle: number;
