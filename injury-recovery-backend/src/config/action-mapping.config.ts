@@ -45,7 +45,7 @@ export const ACTION_MEASUREMENT_MAPPING: Record<ActionName, JointMeasurements> =
         wrist: 'pitch',
     },
     'Internal / External Rotation': {
-        shoulder: 'pitch',
+        shoulder: 'roll',
         elbow: 'roll',
         wrist: 'pitch',
     },
