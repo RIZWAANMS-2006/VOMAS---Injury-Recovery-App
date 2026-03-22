@@ -116,7 +116,7 @@ describe('ActivitiesController', () => {
             });
 
             expect(result.data?.['Internal / External Rotation']).toEqual({
-                shoulder: 'Pitch',
+                shoulder: 'Roll',
                 elbow: 'Roll',
                 wrist: 'Pitch',
             });
