@@ -132,20 +132,7 @@ export class VOMASGateway {
       };
     };
 
-    const getElbowMeasurement = (
-      mapping: { shoulder: MeasurementType; elbow: MeasurementType },
-    ): FilteredJointMeasurement => {
-      const elbowMeasurement = getJointMeasurement('elbow', mapping.elbow);
-      if (mapping.shoulder === 'roll' && mapping.elbow === 'roll') {
-        const shoulderRoll = angles.shoulder.roll.angle;
-        return {
-          angle: elbowMeasurement.angle - shoulderRoll,
-          speed: elbowMeasurement.speed,
-          type: elbowMeasurement.type,
-        };
-      }
-      return elbowMeasurement;
-    };
+
 
     if (actionName === 'All Measure') {
       const allActions: Record<string, FilteredAnglesOutput> = {};
@@ -156,7 +143,7 @@ export class VOMASGateway {
         }
         allActions[action] = {
           shoulder: getJointMeasurement('shoulder', mapping.shoulder),
-          elbow: getElbowMeasurement(mapping),
+          elbow: getJointMeasurement('elbow', mapping.elbow),
           wrist: getJointMeasurement('wrist', mapping.wrist),
         };
       }
@@ -171,7 +158,7 @@ export class VOMASGateway {
 
     return {
       shoulder: getJointMeasurement('shoulder', mapping.shoulder),
-      elbow: getElbowMeasurement(mapping),
+      elbow: getJointMeasurement('elbow', mapping.elbow),
       wrist: getJointMeasurement('wrist', mapping.wrist),
     };
   }
